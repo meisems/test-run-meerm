@@ -18,6 +18,7 @@
 //             Warehouse) with lightbox preview and FileReader upload
 // ══════════════════════════════════════════════════════════════════════
 
+import { supabase } from './supabaseClient'
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Menu, X, LogOut, Home, BarChart2, Users, Package, FileText,
