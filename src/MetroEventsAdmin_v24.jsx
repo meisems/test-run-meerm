@@ -1349,28 +1349,38 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
     setDelCrewConfirm(null);
   };
 
-  const saveStaff=()=>{
+  const saveStaff=async()=>{
     if(!form.name.trim()){setFormErr('Staff name is required.');return;}
     if(!form.username.trim()){setFormErr('A unique username is required.');return;}
-    // Enforce username uniqueness (excluding the current record when editing)
     const usernameConflict=staff.some(s=>
-      s.username.toLowerCase()===form.username.trim().toLowerCase() && s.id!==editStaffId
+      s.username.toLowerCase()===form.username.trim().toLowerCase()&&s.id!==editStaffId
     );
-    if(usernameConflict){setFormErr(`Username "${form.username.trim()}" is already taken. Choose a different one.`);return;}
-    if(!form.password.trim()){setFormErr('A password for this staff member is required.');return;}
+    if(usernameConflict){setFormErr(`Username "${form.username.trim()}" is already taken.`);return;}
+    if(!form.password.trim()){setFormErr('A password is required.');return;}
     const expectedCode=form.role==='admin'?ADMIN_CODE:accessCodes[form.role];
-    if(form.roleCode!==expectedCode){setFormErr(`Invalid ${ROLE_LABEL[form.role]} Access Code. Verify with your administrator.`);return;}
+    if(form.roleCode!==expectedCode){setFormErr(`Invalid ${ROLE_LABEL[form.role]} Access Code.`);return;}
+
     if(editStaffId){
-      setStaff(prev=>prev.map(s=>s.id===editStaffId?{...s,...form,username:form.username.trim(),id:editStaffId}:s));
+      // UPDATE existing profile
+      const {error}=await supabase.from('profiles').update({
+        username:form.username.trim(),
+        role:form.role,
+        full_name:form.name,
+        email:form.email,
+        phone:form.phone,
+      }).eq('id',editStaffId);
+      if(error){setFormErr('Update failed: '+error.message);return;}
+      setStaff(prev=>prev.map(s=>s.id===editStaffId?{...s,...form,id:editStaffId}:s));
       addLog&&addLog(`Edited staff profile for ${form.name}`,editStaffId,'info');
     } else {
-      const newId='S-'+String(staff.length+1).padStart(2,'0');
-      setStaff(prev=>[...prev,{...form,username:form.username.trim(),id:newId,tasks:0}]);
-      addLog&&addLog(`Added new staff member ${form.name} (${form.role})`,newId,'info');
+      // CREATE new — must go through Supabase Auth
+      // New staff must be created via Supabase dashboard (Authentication → Users)
+      // then their profile will auto-populate via the trigger
+      setFormErr('To add new staff, create them in Supabase Dashboard → Authentication → Users, then their profile appears here automatically.');
+      return;
     }
     setShowAddModal(false);
   };
-
   const ef=(k,v)=>setForm(p=>({...p,[k]:v}));
 
   return(
