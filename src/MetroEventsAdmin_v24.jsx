@@ -1373,12 +1373,33 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       setStaff(prev=>prev.map(s=>s.id===editStaffId?{...s,...form,id:editStaffId}:s));
       addLog&&addLog(`Edited staff profile for ${form.name}`,editStaffId,'info');
     } else {
-      // CREATE new — must go through Supabase Auth
-      // New staff must be created via Supabase dashboard (Authentication → Users)
-      // then their profile will auto-populate via the trigger
-      setFormErr('To add new staff, create them in Supabase Dashboard → Authentication → Users, then their profile appears here automatically.');
-      return;
-    }
+    const email=form.email.trim()||`${form.username.trim()}@metroevents.ph`;
+    const {data,error}=await supabase.auth.signUp({
+      email,
+      password:form.password,
+      options:{
+        data:{
+          username:form.username.trim(),
+          role:form.role,
+          full_name:form.name,
+        }
+      }
+    });
+    if(error){setFormErr('Failed to create account: '+error.message);return;}
+
+    await supabase.from('profiles').upsert({
+      id:data.user.id,
+      username:form.username.trim(),
+      role:form.role,
+      full_name:form.name,
+      email,
+      phone:form.phone||'',
+    });
+
+    const {data:updated}=await supabase.from('profiles').select('*');
+    if(updated) setStaff(updated);
+    addLog&&addLog(`Added new staff member ${form.name} (${form.role})`,data.user.id,'info');
+  }
     setShowAddModal(false);
   };
   const ef=(k,v)=>setForm(p=>({...p,[k]:v}));
