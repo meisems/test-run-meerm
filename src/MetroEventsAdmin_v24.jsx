@@ -2672,6 +2672,7 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
       role:resolvedUser.role,
       username:username.trim().toLowerCase(),
       staffId:resolvedUser.staffId,
+      password:password,
     }),900);
   };
 
@@ -3192,39 +3193,30 @@ export default function AdminApp(){
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
-  const handleLogin = async (username, password) => {
-    // Map username to email for Supabase auth
-    let email = username;
-  
-    // If it's the admin username, use the admin email
-    if (username === adminUsername || username === 'admin') {
-      email = 'admin@metroevents.com';
-    } else {
-      // Look up email from staff list
-      const staffRecord = staff.find(s => s.username.toLowerCase() === username.toLowerCase());
-      if (staffRecord) {
-        email = staffRecord.email || `${username}@metroevents.ph`;
-      }
-    }
+  const handleLogin = async (userObj) => {
+  const { username, password, name, role } = userObj;
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      alert('Login failed: ' + error.message);
-      return;
-    }
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', data.user.id)
-      .single();
+  let email;
+  if (role === 'admin') {
+    email = 'admin@metroevents.com';
+  } else {
+    const staffRecord = staff.find(s => s.username.toLowerCase() === username.toLowerCase());
+    email = staffRecord?.email || `${username}@metroevents.ph`;
+  }
 
-    setUser(profile);
-    setView("shell");
-    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profile, view: "shell" })); } catch(e) {}
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) { alert('Login failed: ' + error.message); return; }
 
-    const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
-    setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profile.full_name, role: profile.role, action: 'Logged in', target: profile.username, sev: 'info' }, ...prev]);
-  };
+  const { data: profile } = await supabase
+    .from('profiles').select('*').eq('id', data.user.id).single();
+
+  setUser(profile);
+  setView("shell");
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profile, view: "shell" })); } catch(e) {}
+
+  const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
+  setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profile.full_name, role: profile.role, action: 'Logged in', target: profile.username, sev: 'info' }, ...prev]);
+};
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
