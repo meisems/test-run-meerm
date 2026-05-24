@@ -3192,24 +3192,38 @@ export default function AdminApp(){
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
-  const handleLogin = async (email, password) => {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) {
-    alert('Login failed: ' + error.message);
-    return;
-  }
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', data.user.id)
-    .single();
+  const handleLogin = async (username, password) => {
+    // Map username to email for Supabase auth
+    let email = username;
+  
+    // If it's the admin username, use the admin email
+    if (username === adminUsername || username === 'admin') {
+      email = 'admin@metroevents.com';
+    } else {
+      // Look up email from staff list
+      const staffRecord = staff.find(s => s.username.toLowerCase() === username.toLowerCase());
+      if (staffRecord) {
+        email = staffRecord.email || `${username}@metroevents.ph`;
+      }
+    }
 
-  setUser(profile);
-  setView("shell");
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profile, view: "shell" })); } catch(e) {}
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      alert('Login failed: ' + error.message);
+      return;
+    }
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', data.user.id)
+      .single();
 
-  const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
-  setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profile.full_name, role: profile.role, action: 'Logged in', target: profile.username, sev: 'info' }, ...prev]);
+    setUser(profile);
+    setView("shell");
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profile, view: "shell" })); } catch(e) {}
+
+    const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
+    setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profile.full_name, role: profile.role, action: 'Logged in', target: profile.username, sev: 'info' }, ...prev]);
   };
 
   const handleLogout = async () => {
