@@ -1378,6 +1378,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       email,
       password:form.password,
       options:{
+        emailRedirectTo: undefined,
         data:{
           username:form.username.trim(),
           role:form.role,
