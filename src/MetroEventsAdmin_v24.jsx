@@ -3140,7 +3140,13 @@ export default function AdminApp(){
   const [accessCodes,setAccessCodes]=useState(ACCESS_CODES_INIT);
   // Staff state lifted here so both AuthScreen (for login lookup)
   // and AdminShell/CrewView (for management) share the same source of truth.
-  const [staff,setStaff]=useState(STAFF_INIT);
+  const [staff,setStaff]=useState([]);
+
+  useEffect(()=>{
+    supabase.from('profiles').select('*').then(({data})=>{
+      if(data) setStaff(data);
+    });
+  },[]);
   // Admin password lives in state so it can be changed at runtime.
   const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
   // v2.3 — Admin username lives in state so it can be changed via Change Credentials modal.
