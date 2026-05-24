@@ -3157,47 +3157,34 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
 const SESSION_KEY='metro_session_v1';
 
 export default function AdminApp(){
-  // Lazy initializers read localStorage synchronously — no flash of login screen on refresh
   const [view,setView]=useState(()=>{try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');return s?.view==='shell'&&s?.user?'shell':'auth';}catch(e){return 'auth';}});
   const [user,setUser]=useState(()=>{try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');return s?.view==='shell'&&s?.user?s.user:null;}catch(e){return null;}});
   const [accessCodes,setAccessCodes]=useState(ACCESS_CODES_INIT);
-  // Staff state lifted here so both AuthScreen (for login lookup)
-  // and AdminShell/CrewView (for management) share the same source of truth.
   const [staff,setStaff]=useState([]);
 
-  useEffect(() => {
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      supabase.from('profiles').select('*').eq('id', session.user.id).single()
-        .then(({ data }) => {
-          if (data) {
-            setUser({...data, name: data.full_name});
-            setView("shell");
-          }
-        });
-    }
-  });
-}, []);
-  // Admin password lives in state so it can be changed at runtime.
-  const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
-  // v2.3 — Admin username lives in state so it can be changed via Change Credentials modal.
-  const [adminUsername,setAdminUsername]=useState(ADMIN_USERNAME);
-  // v2.4 — Live audit log (capped at 500 entries, most-recent first)
-  const [auditLogs,setAuditLogs]=useState([]);
+  useEffect(()=>{
+    supabase.from('profiles').select('*').then(({data})=>{
+      if(data) setStaff(data);
+    });
+  },[]);
 
   useEffect(() => {
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      supabase.from('profiles').select('*').eq('id', session.user.id).single()
-        .then(({ data }) => {
-          if (data) {
-            setUser(data);
-            setView("shell");
-          }
-        });
-    }
-  });
-}, []);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        supabase.from('profiles').select('*').eq('id', session.user.id).single()
+          .then(({ data }) => {
+            if (data) {
+              setUser({...data, name: data.full_name});
+              setView("shell");
+            }
+          });
+      }
+    });
+  }, []);
+
+  const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
+  const [adminUsername,setAdminUsername]=useState(ADMIN_USERNAME);
+  const [auditLogs,setAuditLogs]=useState([]);
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
