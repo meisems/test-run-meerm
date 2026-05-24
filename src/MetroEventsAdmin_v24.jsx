@@ -3136,6 +3136,20 @@ export default function AdminApp(){
   // v2.4 — Live audit log (capped at 500 entries, most-recent first)
   const [auditLogs,setAuditLogs]=useState([]);
 
+  useEffect(() => {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session) {
+      supabase.from('profiles').select('*').eq('id', session.user.id).single()
+        .then(({ data }) => {
+          if (data) {
+            setUser(data);
+            setView("shell");
+          }
+        });
+    }
+  });
+}, []);
+
   // Session restored synchronously via lazy useState — no useEffect flash
 
   const handleLogin = async (email, password) => {
@@ -3165,20 +3179,6 @@ export default function AdminApp(){
     setAuditLogs([]);
     try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
   };
-
-  useEffect(() => {
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      supabase.from('profiles').select('*').eq('id', session.user.id).single()
-        .then(({ data }) => {
-          if (data) {
-            setUser(data);
-            setView("shell");
-          }
-        });
-    }
-  });
-}, []);
   
   return(
     <>
