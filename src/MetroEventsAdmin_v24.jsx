@@ -3194,30 +3194,39 @@ export default function AdminApp(){
   // Session restored synchronously via lazy useState — no useEffect flash
 
   const handleLogin = async (userObj) => {
-  const { username, password, name, role } = userObj;
+  const { username, password, role } = userObj;
 
-  let email;
-  if (role === 'admin') {
-    email = 'admin@metroevents.com';
-  } else {
-    const staffRecord = staff.find(s => s.username.toLowerCase() === username.toLowerCase());
-    email = staffRecord?.email || `${username}@metroevents.ph`;
+  // Step 1: get email from profiles table using username
+  const { data: profileData, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('username', username.toLowerCase())
+    .single();
+
+  if (profileError || !profileData) {
+    alert('Login failed: User profile not found.');
+    return;
   }
 
+  const email = profileData.email;
+
+  if (!email) {
+    alert('Login failed: No email associated with this account. Contact your administrator.');
+    return;
+  }
+
+  // Step 2: sign in with email + password
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) { alert('Login failed: ' + error.message); return; }
 
-  const { data: profile } = await supabase
-    .from('profiles').select('*').eq('id', data.user.id).single();
-
-  setUser(profile);
+  setUser(profileData);
   setView("shell");
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profile, view: "shell" })); } catch(e) {}
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profileData, view: "shell" })); } catch(e) {}
 
   const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
-  setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profile.full_name, role: profile.role, action: 'Logged in', target: profile.username, sev: 'info' }, ...prev]);
+  setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profileData.full_name, role: profileData.role, action: 'Logged in', target: profileData.username, sev: 'info' }, ...prev]);
 };
-
+  
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
