@@ -1341,7 +1341,9 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
   const openEdit=(s)=>{setForm({...s,password:s.password||'',roleCode:''});setFormErr('');setEditStaffId(s.id);setShowAddModal(true);};
 
   // v2.2 — permanent staff deletion
-  const deleteStaff=(s)=>{
+  const deleteStaff=async(s)=>{
+    const {error}=await supabase.from('profiles').delete().eq('id',s.id);
+    if(error){alert('Delete failed: '+error.message);return;}
     setStaff(prev=>prev.filter(m=>m.id!==s.id));
     addLog&&addLog(`Deleted staff profile for ${s.name}`,s.id,'warn');
     setDelCrewConfirm(null);
