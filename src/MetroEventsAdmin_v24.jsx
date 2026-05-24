@@ -3185,6 +3185,7 @@ export default function AdminApp(){
   const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
   const [adminUsername,setAdminUsername]=useState(ADMIN_USERNAME);
   const [auditLogs,setAuditLogs]=useState([]);
+}
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
