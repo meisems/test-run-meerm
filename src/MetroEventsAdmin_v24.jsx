@@ -3138,23 +3138,48 @@ export default function AdminApp(){
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
-  const handleLogin=u=>{
-    setUser(u);
-    setView("shell");
-    try{ localStorage.setItem(SESSION_KEY,JSON.stringify({user:u,view:"shell"})); }catch(e){}
-    // Log initial login into audit (done via setTimeout so auditLogs setter runs after user state settles)
-    const ts=new Date().toLocaleString('en-PH',{timeZone:'Asia/Manila',hour12:false});
-    setAuditLogs(prev=>[{id:'L-'+Date.now(),ts,user:u.name,role:u.role,action:'Logged in',target:u.username,sev:'info'},...prev]);
+  const handleLogin = async (email, password) => {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    alert('Login failed: ' + error.message);
+    return;
+  }
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', data.user.id)
+    .single();
+
+  setUser(profile);
+  setView("shell");
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profile, view: "shell" })); } catch(e) {}
+
+  const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
+  setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profile.full_name, role: profile.role, action: 'Logged in', target: profile.username, sev: 'info' }, ...prev]);
   };
 
-  const handleLogout=()=>{
-    // Note: auditLogs resets on logout since it's in-session only (no persistence needed)
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
     setView("auth");
     setAuditLogs([]);
-    try{ localStorage.removeItem(SESSION_KEY); }catch(e){}
+    try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
   };
 
+  useEffect(() => {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session) {
+      supabase.from('profiles').select('*').eq('id', session.user.id).single()
+        .then(({ data }) => {
+          if (data) {
+            setUser(data);
+            setView("shell");
+          }
+        });
+    }
+  });
+}, []);
+  
   return(
     <>
       <style>{STYLES}</style>
