@@ -3165,11 +3165,19 @@ export default function AdminApp(){
   // and AdminShell/CrewView (for management) share the same source of truth.
   const [staff,setStaff]=useState([]);
 
-  useEffect(()=>{
-    supabase.from('profiles').select('*').then(({data})=>{
-      if(data) setStaff(data);
-    });
-  },[]);
+  useEffect(() => {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session) {
+      supabase.from('profiles').select('*').eq('id', session.user.id).single()
+        .then(({ data }) => {
+          if (data) {
+            setUser({...data, name: data.full_name});
+            setView("shell");
+          }
+        });
+    }
+  });
+}, []);
   // Admin password lives in state so it can be changed at runtime.
   const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
   // v2.3 — Admin username lives in state so it can be changed via Change Credentials modal.
@@ -3219,13 +3227,12 @@ export default function AdminApp(){
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) { alert('Login failed: ' + error.message); return; }
 
-  setUser(profileData);
+  setUser({...profileData, name: profileData.full_name});
   setView("shell");
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: profileData, view: "shell" })); } catch(e) {}
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: {...profileData, name: profileData.full_name}, view: "shell" })); } catch(e) {}
 
   const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
   setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profileData.full_name, role: profileData.role, action: 'Logged in', target: profileData.username, sev: 'info' }, ...prev]);
-};
   
   const handleLogout = async () => {
     await supabase.auth.signOut();
