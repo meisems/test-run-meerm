@@ -805,8 +805,11 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
   const advance = (ev)=>{
     const idx=CRM_STAGES.indexOf(ev.stage);
     if(idx<CRM_STAGES.length-1){
-      setEvents(prev=>prev.map(e=>e.id===ev.id?{...e,stage:CRM_STAGES[idx+1]}:e));
-      addLog&&addLog(`Advanced event ${ev.id} to ${CRM_STAGES[idx+1]}`,ev.client,'info');
+      const nextStage=CRM_STAGES[idx+1];
+      setEvents(prev=>prev.map(e=>e.id===ev.id?{...e,stage:nextStage}:e));  // optimistic
+      supabase.from('events').update({stage:nextStage}).eq('id',ev.id)
+        .then(({error})=>{if(error)console.warn('[events] advance failed:',error.message);});
+      addLog&&addLog(`Advanced event ${ev.id} to ${nextStage}`,ev.client,'info');
     }
   };
 
@@ -815,9 +818,16 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
   const startEdit = ()=>{ setEditForm({...sel}); setEditMode(true); };
 
   const saveEdit = ()=>{
-    setEvents(prev=>prev.map(e=>e.id===sel.id?{...editForm,id:sel.id}:e));
+    const updated={...editForm,id:sel.id};
+    setEvents(prev=>prev.map(e=>e.id===sel.id?updated:e));  // optimistic
+    supabase.from('events').update({
+      client:updated.client, event_name:updated.event,
+      date:updated.date, venue:updated.venue, pkg:updated.pkg,
+      coord:updated.coord, value:updated.value,
+      balance:updated.balance, stage:updated.stage,
+    }).eq('id',sel.id).then(({error})=>{if(error)console.warn('[events] update failed:',error.message);});
     addLog&&addLog(`Edited event ${sel.id}`,sel.client,'info');
-    setSel({...editForm,id:sel.id});
+    setSel(updated);
     setEditMode(false);
   };
 
@@ -826,14 +836,24 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
 
   const addEvent = ()=>{
     if(!addForm.client?.trim()) return;
-    const newId='E-'+String(events.length+1).padStart(3,'0');
-    setEvents(prev=>[...prev,{...blankEvent,...addForm,id:newId}]);
+    // Timestamp-based ID avoids duplicate IDs across browsers (unlike events.length+1)
+    const newId='E-'+Date.now().toString(36).toUpperCase().slice(-5);
+    const newEvent={...blankEvent,...addForm,id:newId};
+    setEvents(prev=>[newEvent,...prev]);           // optimistic
+    supabase.from('events').insert({
+      id:newId, client:newEvent.client, event_name:newEvent.event,
+      date:newEvent.date, venue:newEvent.venue, pkg:newEvent.pkg,
+      coord:newEvent.coord, value:newEvent.value,
+      balance:newEvent.balance, stage:newEvent.stage,
+    }).then(({error})=>{if(error)console.warn('[events] insert failed:',error.message);});
     addLog&&addLog(`Created event for ${addForm.client}`,newId,'info');
     setShowAdd(false);
   };
 
   const deleteEvent = (ev)=>{
-    setEvents(prev=>prev.filter(e=>e.id!==ev.id));
+    setEvents(prev=>prev.filter(e=>e.id!==ev.id));  // optimistic
+    supabase.from('events').delete().eq('id',ev.id)
+      .then(({error})=>{if(error)console.warn('[events] delete failed:',error.message);});
     addLog&&addLog(`Deleted event ${ev.id}`,ev.client,'warn');
     setDelConfirm(null);
     if(sel?.id===ev.id) setSel(null);
@@ -3094,8 +3114,27 @@ const ChangePasswordModal = ({user,staff,setStaff,adminPassword,setAdminPassword
 const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adminPassword,setAdminPassword,adminUsername,setAdminUsername,setUser,auditLogs,setAuditLogs})=>{
   const [tab,setTab]=useState('dashboard');
   const [sideOpen,setSideOpen]=useState(false);
+  // Optimistic-first: start from localStorage so the UI is instant on reload,
+  // then fetch Supabase on mount and overwrite with the authoritative server state.
   const [events,setEvents]=useState(()=>{try{const s=localStorage.getItem('metro_events');return s?JSON.parse(s):EVENTS_INIT;}catch(e){return EVENTS_INIT;}});
+  const [eventsLoading,setEventsLoading]=useState(true);
+
+  // Write-through cache: keep localStorage in sync so the next page load is instant.
   useEffect(()=>{try{localStorage.setItem('metro_events',JSON.stringify(events));}catch(e){}},[events]);
+
+  // Authoritative load from Supabase — overwrites local cache on mount.
+  useEffect(()=>{
+    supabase.from('events').select('*').order('created_at',{ascending:false})
+      .then(({data,error})=>{
+        if(data&&!error) setEvents(data.map(r=>({
+          id:r.id, client:r.client||'', event:r.event_name||'',
+          date:r.date||'', venue:r.venue||'', pkg:r.pkg||'',
+          coord:r.coord||'', value:Number(r.value)||0,
+          balance:Number(r.balance)||0, stage:r.stage||'New Inquiry',
+        })));
+        setEventsLoading(false);
+      });
+  },[]);
   const [showChangePw,setShowChangePw]=useState(false);
 
   /* Centralized audit logger — stamps current user and persists to Supabase */
