@@ -1328,7 +1328,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
   const [filter,setFilter]=useState('all');
   const [showAddModal,setShowAddModal]=useState(false);
   const [editStaffId,setEditStaffId]=useState(null);
-  const blankForm={name:'',username:'',role:'coordinator',email:'',phone:'',callTime:'08:00',active:true,password:'',roleCode:''};
+  const blankForm={name:'',username:'',role:'coordinator',email:'',phone:'',callTime:'08:00',password:'',roleCode:''};
   const [form,setForm]=useState(blankForm);
   const [formErr,setFormErr]=useState('');
   // v2.2 — Crew deletion state
@@ -1399,7 +1399,6 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
         full_name:form.name,
         email,
         phone:form.phone||'',
-        active:true,
       });
       if(upsertErr){setFormErr('Auth account created but profile save failed: '+upsertErr.message);return;}
 
@@ -1440,7 +1439,6 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
                 <div style={{fontSize:11,color:'var(--tm)',fontFamily:"'DM Mono',monospace",marginTop:1}}>@{s.username}</div>
                 <div style={{marginTop:3,display:'flex',gap:6,alignItems:'center'}}>
                   <Badge label={s.role} color={rClr[s.role]||'grey'} role="none"/>
-                  {!s.active&&<Badge label="Inactive" color="red"/>}
                 </div>
               </div>
               {/* Action buttons — Edit + Delete (admin only) */}
@@ -1527,16 +1525,6 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
             <Field label="Email" type="email" value={form.email} onChange={v=>ef('email',v)} placeholder="staff@metroevents.ph"/>
             <Field label="Phone" value={form.phone} onChange={v=>ef('phone',v)} placeholder="09XXXXXXXXX"/>
             <Field label="Call Time" value={form.callTime} onChange={v=>ef('callTime',v)} placeholder="08:00"/>
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,fontWeight:600,color:'var(--ts)',letterSpacing:'.05em',display:'block',marginBottom:5,textTransform:'uppercase'}}>Active Status</label>
-              <div style={{display:'flex',gap:8}}>
-                {[true,false].map(v=>(
-                  <button key={String(v)} onClick={()=>ef('active',v)} style={{flex:1,padding:'8px',border:`1.5px solid ${form.active===v?'var(--gold)':'var(--border)'}`,borderRadius:'var(--r-sm)',background:form.active===v?'var(--gold-pale)':'transparent',color:form.active===v?'var(--gold)':'var(--ts)',fontSize:12,fontWeight:600,cursor:'pointer'}}>
-                    {v?'Active':'Inactive'}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* Security credentials — full-width section below */}
@@ -2649,9 +2637,9 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
     // Query Supabase directly — avoids depending on the pre-login staff array
     // which is empty until RLS grants an authenticated session.
     setLoading(true);
-    const {data,error}=await supabase.from('profiles').select('id,username,full_name,role,active').eq('username',u).maybeSingle();
+    const {data,error}=await supabase.from('profiles').select('id,username,full_name,role').eq('username',u).maybeSingle();
     setLoading(false);
-    if(error||!data||!data.active){setErr('No active account found for that username. Contact your administrator.');return;}
+    if(error||!data){setErr('No account found for that username. Contact your administrator.');return;}
     setResolvedUser({name:data.full_name||data.name||'',role:data.role,staffId:data.id});
     setErr('');setStep(2);
   };
