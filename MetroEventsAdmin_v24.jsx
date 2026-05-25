@@ -940,6 +940,7 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
                   key==='coord'?(
                     <select className="edit-field" value={editForm[key]||''} onChange={e=>ef(key,e.target.value)} style={{marginTop:2}}>
                       <option value=''>— Unassigned —</option>
+                      {canAdmin&&<option value="Administrator">Administrator</option>}
                       {staff.filter(s=>s.active&&(s.role==='coordinator'||s.role==='admin')).map(s=>(<option key={s.id} value={s.name}>{s.name}</option>))}
                     </select>
                   ):(
@@ -1004,6 +1005,7 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
                 {key==='coord'?(
                   <select className="edit-field" value={addForm[key]||''} onChange={e=>aef(key,e.target.value)}>
                     <option value=''>— Select Coordinator —</option>
+                    {canAdmin&&<option value="Administrator">Administrator</option>}
                     {staff.filter(s=>s.active&&(s.role==='coordinator'||s.role==='admin')).map(s=>(<option key={s.id} value={s.name}>{s.name}</option>))}
                   </select>
                 ):(
@@ -2434,7 +2436,11 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
   const startCodeEdit=(r)=>setCodeEdit(p=>({...p,[r]:accessCodes[r]}));
   const saveCodeEdit=(r)=>{
     if(codeEdit[r]&&codeEdit[r].trim()){
-      setAccessCodes(p=>({...p,[r]:codeEdit[r].trim()}));
+      const newVal=codeEdit[r].trim();
+      setAccessCodes(p=>({...p,[r]:newVal}));
+      // Persist to Supabase so all browsers get the updated code
+      supabase.from('app_settings').upsert({key:'access_code_'+r,value:newVal},{onConflict:'key'})
+        .then(({error})=>{if(error)console.warn('[access_code] save failed:',error.message);});
       addLog&&addLog(`Updated access code for ${r} role`,r,'warn');
     }
     setCodeEdit(p=>{const n={...p};delete n[r];return n;});
@@ -2445,6 +2451,9 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
     const newCode=genCode();
     setTimeout(()=>{
       setAccessCodes(p=>({...p,[r]:newCode}));
+      // Persist rotated code to Supabase so all browsers get the new code
+      supabase.from('app_settings').upsert({key:'access_code_'+r,value:newCode},{onConflict:'key'})
+        .then(({error})=>{if(error)console.warn('[access_code] rotate failed:',error.message);});
       addLog&&addLog(`Rotated access code for ${r} role`,r,'warn');
       setRotateAnim(p=>({...p,[r]:false}));
     },600);
@@ -3204,6 +3213,18 @@ export default function AdminApp(){
   const [user,setUser]=useState(()=>{try{const s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');return s?.view==='shell'&&s?.user?s.user:null;}catch(e){return null;}});
   const [accessCodes,setAccessCodes]=useState(ACCESS_CODES_INIT);
   const [staff,setStaff]=useState([]);
+
+  // Load persisted access codes from Supabase on mount; fall back to defaults if table not yet seeded
+  useEffect(()=>{
+    supabase.from('app_settings').select('key,value').in('key',['access_code_coordinator','access_code_designer','access_code_warehouse'])
+      .then(({data})=>{
+        if(data&&data.length){
+          const map={};
+          data.forEach(r=>{map[r.key.replace('access_code_','')]=r.value;});
+          setAccessCodes(p=>({...p,...map}));
+        }
+      });
+  },[]);
 
   useEffect(()=>{
     supabase.from('profiles').select('*').then(({data})=>{
