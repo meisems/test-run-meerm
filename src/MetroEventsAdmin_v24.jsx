@@ -3122,43 +3122,62 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
   // Write-through cache: keep localStorage in sync so the next page load is instant.
   useEffect(()=>{try{localStorage.setItem('metro_events',JSON.stringify(events));}catch(e){}},[events]);
 
-  // Authoritative sync with Supabase on mount.
-  // Strategy: merge — Supabase wins on ID conflicts; local-only events are
-  // preserved (and pushed up) so a missing/empty table never wipes local data.
+  // ── Realtime sync ──────────────────────────────────────────────────────────
+  // 1. Initial fetch: load all events from Supabase. If the table doesn't exist
+  //    or the network is down, local events from localStorage are kept and pushed
+  //    up to Supabase once they can reach it.
+  // 2. Realtime channel: Supabase broadcasts every INSERT / UPDATE / DELETE to
+  //    every connected browser instantly — no polling, no manual refresh needed.
+  // ──────────────────────────────────────────────────────────────────────────
+  const toLocal = r => ({
+    id:r.id, client:r.client||'', event:r.event_name||'',
+    date:r.date||'', venue:r.venue||'', pkg:r.pkg||'',
+    coord:r.coord||'', value:Number(r.value)||0,
+    balance:Number(r.balance)||0, stage:r.stage||'New Inquiry',
+  });
+
   useEffect(()=>{
+    // Step 1: initial full load
     supabase.from('events').select('*').order('created_at',{ascending:false})
       .then(({data,error})=>{
         if(error){
-          // Table may not exist yet — keep whatever is in localStorage.
-          console.warn('[events] fetch failed (table may not exist):',error.message);
+          console.warn('[events] initial fetch failed:',error.message);
           setEventsLoading(false);
           return;
         }
-        const remoteEvents=(data||[]).map(r=>({
-          id:r.id, client:r.client||'', event:r.event_name||'',
-          date:r.date||'', venue:r.venue||'', pkg:r.pkg||'',
-          coord:r.coord||'', value:Number(r.value)||0,
-          balance:Number(r.balance)||0, stage:r.stage||'New Inquiry',
-        }));
-        const remoteIds=new Set(remoteEvents.map(e=>e.id));
-
+        const remote=(data||[]).map(toLocal);
+        const remoteIds=new Set(remote.map(e=>e.id));
         setEvents(prev=>{
-          // Events that are in localStorage but NOT in Supabase yet — push them up.
           const localOnly=prev.filter(e=>!remoteIds.has(e.id));
           if(localOnly.length>0){
             supabase.from('events').upsert(localOnly.map(e=>({
-              id:e.id, client:e.client, event_name:e.event,
-              date:e.date, venue:e.venue, pkg:e.pkg,
-              coord:e.coord, value:e.value, balance:e.balance, stage:e.stage,
+              id:e.id,client:e.client,event_name:e.event,date:e.date,
+              venue:e.venue,pkg:e.pkg,coord:e.coord,
+              value:e.value,balance:e.balance,stage:e.stage,
             }))).then(({error:uErr})=>{
               if(uErr) console.warn('[events] local-only push failed:',uErr.message);
             });
           }
-          // Merge: remote events are authoritative for conflicts; local-only are appended.
-          return [...remoteEvents, ...localOnly];
+          return [...remote,...localOnly];
         });
         setEventsLoading(false);
       });
+
+    // Step 2: live subscription — every browser sees changes immediately
+    const channel = supabase
+      .channel('events-realtime')
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'events'},
+        ({new:row})=>{ setEvents(prev=>prev.find(e=>e.id===row.id)?prev:[toLocal(row),...prev]); })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'events'},
+        ({new:row})=>{ setEvents(prev=>prev.map(e=>e.id===row.id?toLocal(row):e)); })
+      .on('postgres_changes',{event:'DELETE',schema:'public',table:'events'},
+        ({old:row})=>{ setEvents(prev=>prev.filter(e=>e.id!==row.id)); })
+      .subscribe(status=>{
+        if(status==='SUBSCRIBED') console.info('[events] realtime connected');
+        if(status==='CHANNEL_ERROR') console.warn('[events] realtime error — enable Realtime in Supabase dashboard for the events table');
+      });
+
+    return ()=>{ supabase.removeChannel(channel); };
   },[]);
   const [showChangePw,setShowChangePw]=useState(false);
 
