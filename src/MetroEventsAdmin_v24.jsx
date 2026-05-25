@@ -1356,12 +1356,14 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       s.username.toLowerCase()===form.username.trim().toLowerCase()&&s.id!==editStaffId
     );
     if(usernameConflict){setFormErr(`Username "${form.username.trim()}" is already taken.`);return;}
-    if(!form.password.trim()){setFormErr('A password is required.');return;}
+    // Password is only required when creating a new account — not when editing an existing profile.
+    // Passwords live in Supabase Auth and are never stored in the profiles table.
+    if(!editStaffId&&!form.password.trim()){setFormErr('A password is required.');return;}
     const expectedCode=form.role==='admin'?ADMIN_CODE:accessCodes[form.role];
     if(form.roleCode!==expectedCode){setFormErr(`Invalid ${ROLE_LABEL[form.role]} Access Code.`);return;}
 
     if(editStaffId){
-      // UPDATE existing profile
+      // UPDATE existing profile (password not touched — use ChangePasswordModal for that)
       const {error}=await supabase.from('profiles').update({
         username:form.username.trim(),
         role:form.role,
@@ -1373,34 +1375,38 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       setStaff(prev=>prev.map(s=>s.id===editStaffId?{...s,...form,id:editStaffId}:s));
       addLog&&addLog(`Edited staff profile for ${form.name}`,editStaffId,'info');
     } else {
-    const email=form.email.trim()||`${form.username.trim()}@metroevents.ph`;
-    const {data,error}=await supabase.auth.signUp({
-      email,
-      password:form.password,
-      options:{
-        emailRedirectTo: undefined,
-        data:{
-          username:form.username.trim(),
-          role:form.role,
-          full_name:form.name,
+      const email=form.email.trim()||`${form.username.trim()}@metroevents.ph`;
+      const {data,error}=await supabase.auth.signUp({
+        email,
+        password:form.password,
+        options:{
+          emailRedirectTo: undefined,
+          data:{
+            username:form.username.trim(),
+            role:form.role,
+            full_name:form.name,
+          }
         }
-      }
-    });
-    if(error){setFormErr('Failed to create account: '+error.message);return;}
+      });
+      if(error){setFormErr('Failed to create account: '+error.message);return;}
+      // data.user is null when email confirmation is still ON — remind admin to disable it.
+      if(!data.user){setFormErr('Account pending email confirmation. Go to Supabase → Auth → Email and disable "Confirm email".');return;}
 
-    await supabase.from('profiles').upsert({
-      id:data.user.id,
-      username:form.username.trim(),
-      role:form.role,
-      full_name:form.name,
-      email,
-      phone:form.phone||'',
-    });
+      const {error:upsertErr}=await supabase.from('profiles').upsert({
+        id:data.user.id,
+        username:form.username.trim(),
+        role:form.role,
+        full_name:form.name,
+        email,
+        phone:form.phone||'',
+        active:true,
+      });
+      if(upsertErr){setFormErr('Auth account created but profile save failed: '+upsertErr.message);return;}
 
-    const {data:updated}=await supabase.from('profiles').select('*');
-    if(updated) setStaff(updated);
-    addLog&&addLog(`Added new staff member ${form.name} (${form.role})`,data.user.id,'info');
-  }
+      const {data:updated}=await supabase.from('profiles').select('*');
+      if(updated) setStaff(updated);
+      addLog&&addLog(`Added new staff member ${form.name} (${form.role})`,data.user.id,'info');
+    }
     setShowAddModal(false);
   };
   const ef=(k,v)=>setForm(p=>({...p,[k]:v}));
@@ -2632,7 +2638,7 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
   const [loading,setLoading]=useState(false);
   const [step,setStep]=useState(1); // 1=identity, 2=credentials
 
-  const nextStep=()=>{
+  const nextStep=async ()=>{
     const u=username.trim().toLowerCase();
     if(!u){setErr('Please enter your username.');return;}
     // Admin bypass — use the current adminUsername (changeable at runtime v2.3)
@@ -2640,10 +2646,13 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
       setResolvedUser({name:'Administrator',role:'admin',staffId:null});
       setErr('');setStep(2);return;
     }
-    // Look up in staff array
-    const found=staff.find(s=>s.username.toLowerCase()===u&&s.active);
-    if(!found){setErr('No active account found for that username. Contact your administrator.');return;}
-    setResolvedUser({name:found.name,role:found.role,staffId:found.id});
+    // Query Supabase directly — avoids depending on the pre-login staff array
+    // which is empty until RLS grants an authenticated session.
+    setLoading(true);
+    const {data,error}=await supabase.from('profiles').select('id,username,full_name,role,active').eq('username',u).maybeSingle();
+    setLoading(false);
+    if(error||!data||!data.active){setErr('No active account found for that username. Contact your administrator.');return;}
+    setResolvedUser({name:data.full_name,role:data.role,staffId:data.id});
     setErr('');setStep(2);
   };
 
@@ -2659,9 +2668,9 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
       if(password!==adminPassword){setErr('Incorrect password. Please try again.');return;}
       if(code!==ADMIN_CODE){setErr('Invalid administrator access code. Contact your system operator.');return;}
     } else {
-      const staffRecord=staff.find(s=>s.id===staffId);
-      if(!staffRecord){setErr('Staff record not found. Contact your administrator.');return;}
-      if(password!==staffRecord.password){setErr('Incorrect password. Please try again.');return;}
+      // Password is validated server-side by Supabase auth in handleLogin.
+      // Passwords are never stored in the profiles table — do NOT check locally.
+      // Only verify the role access code here (second factor).
       const expectedCode=accessCodes[role];
       if(code!==expectedCode){setErr('Invalid access code for this role. Contact your administrator.');return;}
     }
@@ -2827,7 +2836,7 @@ const ChangePasswordModal = ({user,staff,setStaff,adminPassword,setAdminPassword
   // Tracks whether the admin wants to change their username at all
   const wantsUsernameChange=isAdmin&&newUsername.trim().length>0;
 
-  const submit=()=>{
+  const submit=async ()=>{
     // Password fields are required only if any password field is filled,
     // OR if no username change is happening (i.e. something must change).
     const anyPwField=curPw||newPw||confPw;
@@ -2844,9 +2853,13 @@ const ChangePasswordModal = ({user,staff,setStaff,adminPassword,setAdminPassword
     if(isAdmin){
       if(changingPw&&curPw!==adminPassword){setErr('Current password is incorrect.');return;}
     } else {
-      const staffRecord=staff.find(s=>s.id===user.staffId);
-      if(!staffRecord){setErr('Staff record not found. Contact your administrator.');return;}
-      if(changingPw&&curPw!==staffRecord.password){setErr('Current password is incorrect.');return;}
+      if(changingPw){
+        // Re-authenticate via Supabase to verify current password — never stored in profiles.
+        const staffRecord=staff.find(s=>s.id===user.staffId);
+        if(!staffRecord||!staffRecord.email){setErr('Staff record not found. Contact your administrator.');return;}
+        const {error:reAuthErr}=await supabase.auth.signInWithPassword({email:staffRecord.email,password:curPw});
+        if(reAuthErr){setErr('Current password is incorrect.');return;}
+      }
     }
 
     // Validate new username (admin only)
@@ -2869,6 +2882,9 @@ const ChangePasswordModal = ({user,staff,setStaff,adminPassword,setAdminPassword
       }
     } else {
       if(changingPw){
+        // Persist new password to Supabase Auth — requires active crew session.
+        const { error: pwErr } = await supabase.auth.updateUser({ password: newPw });
+        if(pwErr){ setErr('Password update failed: ' + pwErr.message); return; }
         setStaff(prev=>prev.map(s=>s.id===user.staffId?{...s,password:newPw}:s));
       }
     }
@@ -3185,43 +3201,55 @@ export default function AdminApp(){
   const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
   const [adminUsername,setAdminUsername]=useState(ADMIN_USERNAME);
   const [auditLogs,setAuditLogs]=useState([]);
-}
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
   const handleLogin = async (userObj) => {
-  const { username, password, role } = userObj;
+    const { username, password, role } = userObj;
 
-  // Step 1: get email from profiles table using username
-  const { data: profileData, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('username', username.toLowerCase())
-    .single();
+    // Admin uses hardcoded credentials — no Supabase auth account needed.
+    // Password + access code were already validated in AuthScreen.submit().
+    if (role === 'admin') {
+      const adminUser = { name: 'Administrator', role: 'admin', username, staffId: null };
+      setUser(adminUser);
+      setView("shell");
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: adminUser, view: "shell" })); } catch(e) {}
+      const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
+      setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: 'Administrator', role: 'admin', action: 'Logged in', target: username, sev: 'info' }, ...prev]);
+      return;
+    }
 
-  if (profileError || !profileData) {
-    alert('Login failed: User profile not found.');
-    return;
-  }
+    // Step 1: get email from profiles table using username
+    const { data: profileData, error: profileError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('username', username.toLowerCase())
+      .single();
 
-  const email = profileData.email;
+    if (profileError || !profileData) {
+      alert('Login failed: User profile not found.');
+      return;
+    }
 
-  if (!email) {
-    alert('Login failed: No email associated with this account. Contact your administrator.');
-    return;
-  }
+    const email = profileData.email;
 
-  // Step 2: sign in with email + password
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) { alert('Login failed: ' + error.message); return; }
+    if (!email) {
+      alert('Login failed: No email associated with this account. Contact your administrator.');
+      return;
+    }
 
-  setUser({...profileData, name: profileData.full_name});
-  setView("shell");
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: {...profileData, name: profileData.full_name}, view: "shell" })); } catch(e) {}
+    // Step 2: sign in with email + password
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) { alert('Login failed: ' + error.message); return; }
 
-  const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
-  setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profileData.full_name, role: profileData.role, action: 'Logged in', target: profileData.username, sev: 'info' }, ...prev]);
-  
+    setUser({...profileData, name: profileData.full_name});
+    setView("shell");
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: {...profileData, name: profileData.full_name}, view: "shell" })); } catch(e) {}
+
+    const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
+    setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profileData.full_name, role: profileData.role, action: 'Logged in', target: profileData.username, sev: 'info' }, ...prev]);
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -3229,7 +3257,7 @@ export default function AdminApp(){
     setAuditLogs([]);
     try { localStorage.removeItem(SESSION_KEY); } catch(e) {}
   };
-  
+
   return(
     <>
       <style>{STYLES}</style>
