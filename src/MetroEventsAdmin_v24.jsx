@@ -940,6 +940,7 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
                   key==='coord'?(
                     <select className="edit-field" value={editForm[key]||''} onChange={e=>ef(key,e.target.value)} style={{marginTop:2}}>
                       <option value=''>— Unassigned —</option>
+                      {canAdmin&&<option value="Administrator">Administrator</option>}
                       {staff.filter(s=>s.active&&(s.role==='coordinator'||s.role==='admin')).map(s=>(<option key={s.id} value={s.name}>{s.name}</option>))}
                     </select>
                   ):(
@@ -1004,6 +1005,7 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
                 {key==='coord'?(
                   <select className="edit-field" value={addForm[key]||''} onChange={e=>aef(key,e.target.value)}>
                     <option value=''>— Select Coordinator —</option>
+                    {canAdmin&&<option value="Administrator">Administrator</option>}
                     {staff.filter(s=>s.active&&(s.role==='coordinator'||s.role==='admin')).map(s=>(<option key={s.id} value={s.name}>{s.name}</option>))}
                   </select>
                 ):(
@@ -1436,7 +1438,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       if(upsertErr){setFormErr('Auth account created but profile save failed: '+upsertErr.message);return;}
 
       const {data:updated}=await supabase.from('profiles').select('*');
-      if(updated) setStaff(updated);
+      if(updated) setStaff(updated.map(s=>({...s, name: s.name ?? s.full_name ?? '', active: s.active ?? true})));
       addLog&&addLog(`Added new staff member ${form.name} (${form.role})`,newUser.id,'info');
     }
     setShowAddModal(false);
@@ -2434,7 +2436,11 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
   const startCodeEdit=(r)=>setCodeEdit(p=>({...p,[r]:accessCodes[r]}));
   const saveCodeEdit=(r)=>{
     if(codeEdit[r]&&codeEdit[r].trim()){
-      setAccessCodes(p=>({...p,[r]:codeEdit[r].trim()}));
+      const newVal=codeEdit[r].trim();
+      setAccessCodes(p=>({...p,[r]:newVal}));
+      // Persist to Supabase so all browsers get the updated code
+      supabase.from('app_settings').upsert({key:'access_code_'+r,value:newVal},{onConflict:'key'})
+        .then(({error})=>{if(error)console.warn('[access_code] save failed:',error.message);});
       addLog&&addLog(`Updated access code for ${r} role`,r,'warn');
     }
     setCodeEdit(p=>{const n={...p};delete n[r];return n;});
@@ -2445,6 +2451,9 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
     const newCode=genCode();
     setTimeout(()=>{
       setAccessCodes(p=>({...p,[r]:newCode}));
+      // Persist rotated code to Supabase so all browsers get the new code
+      supabase.from('app_settings').upsert({key:'access_code_'+r,value:newCode},{onConflict:'key'})
+        .then(({error})=>{if(error)console.warn('[access_code] rotate failed:',error.message);});
       addLog&&addLog(`Rotated access code for ${r} role`,r,'warn');
       setRotateAnim(p=>({...p,[r]:false}));
     },600);
@@ -3020,10 +3029,15 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
   useEffect(()=>{try{localStorage.setItem('metro_events',JSON.stringify(events));}catch(e){}},[events]);
   const [showChangePw,setShowChangePw]=useState(false);
 
-  /* Centralized audit logger — always stamps the current user */
+  /* Centralized audit logger — stamps current user and persists to Supabase */
   const addLog=(action,target,sev='info')=>{
     const ts=new Date().toLocaleString('en-PH',{timeZone:'Asia/Manila',hour12:false});
-    setAuditLogs(prev=>[{id:'L-'+Date.now(),ts,user:user.name,role:user.role,action,target,sev},...prev].slice(0,500));
+    const localId='L-'+Date.now();
+    // Optimistic local update so the UI reflects immediately
+    setAuditLogs(prev=>[{id:localId,ts,user:user.name,role:user.role,action,target,sev},...prev].slice(0,500));
+    // Persist to Supabase so all browsers see the entry
+    supabase.from('audit_logs').insert({ts,user_name:user.name,role:user.role,action,target,sev})
+      .then(({error})=>{if(error)console.warn('[audit] write failed:',error.message);});
   };
 
   const allowed=ACCESS[user.role]||[];
@@ -3200,11 +3214,25 @@ export default function AdminApp(){
   const [accessCodes,setAccessCodes]=useState(ACCESS_CODES_INIT);
   const [staff,setStaff]=useState([]);
 
+  // Load persisted access codes from Supabase on mount; fall back to defaults if table not yet seeded
+  useEffect(()=>{
+    supabase.from('app_settings').select('key,value').in('key',['access_code_coordinator','access_code_designer','access_code_warehouse'])
+      .then(({data})=>{
+        if(data&&data.length){
+          const map={};
+          data.forEach(r=>{map[r.key.replace('access_code_','')]=r.value;});
+          setAccessCodes(p=>({...p,...map}));
+        }
+      });
+  },[]);
+
   useEffect(()=>{
     supabase.from('profiles').select('*').then(({data})=>{
       // Normalise: ensure every staff record exposes `.name` regardless of
       // whether the DB column is called full_name or name.
-      if(data) setStaff(data.map(s=>({...s, name: s.name ?? s.full_name ?? ''})));
+      // Default `active` to true — profiles table may not have this column;
+      // undefined is falsy and would silently filter out every staff member.
+      if(data) setStaff(data.map(s=>({...s, name: s.name ?? s.full_name ?? '', active: s.active ?? true})));
     });
   },[]);
 
@@ -3224,9 +3252,16 @@ export default function AdminApp(){
 
   const [adminPassword,setAdminPassword]=useState(ADMIN_PASSWORD_DEFAULT);
   const [adminUsername,setAdminUsername]=useState(ADMIN_USERNAME);
-  const [auditLogs,setAuditLogs]=useState(()=>{try{const s=localStorage.getItem('metro_audit_logs');return s?JSON.parse(s):[];}catch(e){return [];}});
-  // Persist audit log to localStorage so entries survive across sessions
-  useEffect(()=>{try{localStorage.setItem('metro_audit_logs',JSON.stringify(auditLogs.slice(0,500)));}catch(e){}},[auditLogs]);
+  const [auditLogs,setAuditLogs]=useState([]);
+  // Fetch all audit logs from Supabase on mount so every browser sees full history
+  useEffect(()=>{
+    supabase.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(500)
+      .then(({data,error})=>{
+        if(data&&!error){
+          setAuditLogs(data.map(r=>({id:r.id,ts:r.ts,user:r.user_name,role:r.role,action:r.action,target:r.target,sev:r.sev})));
+        }
+      });
+  },[]);
 
   // Session restored synchronously via lazy useState — no useEffect flash
 
@@ -3242,6 +3277,8 @@ export default function AdminApp(){
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: adminUser, view: "shell" })); } catch(e) {}
       const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
       setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: 'Administrator', role: 'admin', action: 'Logged in', target: username, sev: 'info' }, ...prev]);
+      supabase.from('audit_logs').insert({ts, user_name:'Administrator', role:'admin', action:'Logged in', target:username, sev:'info'})
+        .then(({error})=>{if(error)console.warn('[audit] login write failed:',error.message);});
       return;
     }
 
@@ -3274,6 +3311,8 @@ export default function AdminApp(){
 
     const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
     setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profileData.full_name, role: profileData.role, action: 'Logged in', target: profileData.username, sev: 'info' }, ...prev]);
+    supabase.from('audit_logs').insert({ts, user_name:profileData.full_name, role:profileData.role, action:'Logged in', target:profileData.username, sev:'info'})
+      .then(({error})=>{if(error)console.warn('[audit] login write failed:',error.message);});
   };
 
   const handleLogout = async () => {
