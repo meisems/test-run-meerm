@@ -1433,7 +1433,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
           onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='var(--sh-sm)'}}>
             <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
               <div style={{width:40,height:40,borderRadius:'50%',background:`linear-gradient(135deg,var(--navy),var(--navy-lt))`,border:`1.5px solid var(--gold-border)`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                <span className="disp" style={{fontSize:17,fontWeight:700,color:'var(--gold-lt)'}}>{s.name.charAt(0)}</span>
+                <span className="disp" style={{fontSize:17,fontWeight:700,color:'var(--gold-lt)'}}>{(s.name||s.full_name||'?').charAt(0)}</span>
               </div>
               <div style={{overflow:'hidden',flex:1}}>
                 <div style={{fontSize:14,fontWeight:600,color:'var(--tp)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}</div>
@@ -1578,7 +1578,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
           <div style={{padding:'14px 16px',background:'var(--danger-pale)',border:'1px solid var(--danger-border)',borderRadius:'var(--r-md)',marginBottom:16}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
               <div style={{width:38,height:38,borderRadius:'50%',background:`linear-gradient(135deg,var(--navy),var(--navy-lt))`,border:`1.5px solid var(--danger-border)`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                <span className="disp" style={{fontSize:16,fontWeight:700,color:'var(--danger)'}}>{delCrewConfirm.name.charAt(0)}</span>
+                <span className="disp" style={{fontSize:16,fontWeight:700,color:'var(--danger)'}}>{(delCrewConfirm.name||delCrewConfirm.full_name||'?').charAt(0)}</span>
               </div>
               <div>
                 <div style={{fontSize:14,fontWeight:700,color:'var(--danger)'}}>{delCrewConfirm.name}</div>
@@ -2652,7 +2652,7 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
     const {data,error}=await supabase.from('profiles').select('id,username,full_name,role,active').eq('username',u).maybeSingle();
     setLoading(false);
     if(error||!data||!data.active){setErr('No active account found for that username. Contact your administrator.');return;}
-    setResolvedUser({name:data.full_name,role:data.role,staffId:data.id});
+    setResolvedUser({name:data.full_name||data.name||'',role:data.role,staffId:data.id});
     setErr('');setStep(2);
   };
 
@@ -2748,7 +2748,7 @@ const AuthScreen = ({onLogin,accessCodes,staff,adminPassword,adminUsername})=>{
             {/* Resolved identity banner */}
             <div style={{padding:'10px 14px',background:'var(--overlay)',borderRadius:'var(--r-md)',marginBottom:18,display:'flex',gap:10,alignItems:'center'}}>
               <div style={{width:30,height:30,background:'var(--navy)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                <span className="disp" style={{fontSize:13,fontWeight:700,color:'var(--gold-lt)'}}>{resolvedUser.name.charAt(0)||'?'}</span>
+                <span className="disp" style={{fontSize:13,fontWeight:700,color:'var(--gold-lt)'}}>{(resolvedUser.name||resolvedUser.full_name||'?').charAt(0)}</span>
               </div>
               <div style={{flex:1}}>
                 <div style={{fontSize:13,fontWeight:600,color:'var(--tp)'}}>{resolvedUser.name}</div>
@@ -3088,7 +3088,7 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
         <div style={{padding:'13px 16px',borderBottom:'1px solid rgba(255,255,255,.05)'}}>
           <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:10}}>
             <div style={{width:32,height:32,background:'linear-gradient(135deg,var(--navy-lt),#3a4568)',borderRadius:'50%',border:'1.5px solid rgba(184,146,74,.3)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-              <span className="disp" style={{fontSize:14,fontWeight:700,color:'var(--gold-lt)'}}>{user.name.charAt(0)}</span>
+              <span className="disp" style={{fontSize:14,fontWeight:700,color:'var(--gold-lt)'}}>{(user.name||user.full_name||'?').charAt(0)}</span>
             </div>
             <div style={{overflow:'hidden',flex:1}}>
               <div style={{fontSize:12,fontWeight:600,color:'#f8f4ed',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{user.name}</div>
@@ -3180,7 +3180,9 @@ export default function AdminApp(){
 
   useEffect(()=>{
     supabase.from('profiles').select('*').then(({data})=>{
-      if(data) setStaff(data);
+      // Normalise: ensure every staff record exposes `.name` regardless of
+      // whether the DB column is called full_name or name.
+      if(data) setStaff(data.map(s=>({...s, name: s.name ?? s.full_name ?? ''})));
     });
   },[]);
 
