@@ -3122,16 +3122,41 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
   // Write-through cache: keep localStorage in sync so the next page load is instant.
   useEffect(()=>{try{localStorage.setItem('metro_events',JSON.stringify(events));}catch(e){}},[events]);
 
-  // Authoritative load from Supabase — overwrites local cache on mount.
+  // Authoritative sync with Supabase on mount.
+  // Strategy: merge — Supabase wins on ID conflicts; local-only events are
+  // preserved (and pushed up) so a missing/empty table never wipes local data.
   useEffect(()=>{
     supabase.from('events').select('*').order('created_at',{ascending:false})
       .then(({data,error})=>{
-        if(data&&!error) setEvents(data.map(r=>({
+        if(error){
+          // Table may not exist yet — keep whatever is in localStorage.
+          console.warn('[events] fetch failed (table may not exist):',error.message);
+          setEventsLoading(false);
+          return;
+        }
+        const remoteEvents=(data||[]).map(r=>({
           id:r.id, client:r.client||'', event:r.event_name||'',
           date:r.date||'', venue:r.venue||'', pkg:r.pkg||'',
           coord:r.coord||'', value:Number(r.value)||0,
           balance:Number(r.balance)||0, stage:r.stage||'New Inquiry',
-        })));
+        }));
+        const remoteIds=new Set(remoteEvents.map(e=>e.id));
+
+        setEvents(prev=>{
+          // Events that are in localStorage but NOT in Supabase yet — push them up.
+          const localOnly=prev.filter(e=>!remoteIds.has(e.id));
+          if(localOnly.length>0){
+            supabase.from('events').upsert(localOnly.map(e=>({
+              id:e.id, client:e.client, event_name:e.event,
+              date:e.date, venue:e.venue, pkg:e.pkg,
+              coord:e.coord, value:e.value, balance:e.balance, stage:e.stage,
+            }))).then(({error:uErr})=>{
+              if(uErr) console.warn('[events] local-only push failed:',uErr.message);
+            });
+          }
+          // Merge: remote events are authoritative for conflicts; local-only are appended.
+          return [...remoteEvents, ...localOnly];
+        });
         setEventsLoading(false);
       });
   },[]);
