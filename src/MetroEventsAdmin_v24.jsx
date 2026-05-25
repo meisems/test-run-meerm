@@ -157,13 +157,15 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none}
   .mob-stack{flex-direction:column}
   .hide-m{display:none!important}
   .show-m{display:flex!important}
-  .admin-main{margin-left:0!important;padding:66px 12px 32px!important}
+  .admin-main{margin-left:0!important;padding:66px 12px 32px!important;max-width:100vw!important;width:100%!important;}
 }
 @media(max-width:640px){
   /* Stack all multi-col grids to single column */
   .g-2,.g-3,.g-2-side{grid-template-columns:1fr!important}
-  /* Stat cards: 2-up on small screens */
-  .stat-card{flex:1 1 calc(50% - 8px)!important;min-width:0!important}
+  /* Stat cards: 2-up on small screens, proper basis accounting for 14px gap */
+  .stat-card{flex:1 1 calc(50% - 7px)!important;min-width:0!important;padding:14px!important}
+  /* Reduce stat value font size on mobile */
+  .stat-val{font-size:20px!important}
   /* Touch-friendly tap targets */
   button{min-height:40px}
   /* Prevent iOS auto-zoom on focus (needs ≥16px) */
@@ -172,8 +174,10 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none}
   .kan-col{min-width:172px;max-width:182px}
   /* Remove left border in split modal panels */
   .mob-no-bdr-l{border-left:none!important;padding-left:0!important;padding-top:14px!important;border-top:1px solid var(--border)!important}
-  /* Quotation summary: not sticky on narrow screens */
-  .quo-sticky{position:static!important}
+  /* Quotation summary: not sticky on narrow screens, move to top via order */
+  .quo-sticky{position:static!important;order:-1}
+  /* g-2-side: switch to flex column so order property works */
+  .g-2-side{display:flex!important;flex-direction:column!important}
   /* Tighter table cells on small screens */
   .dt td,.dt th{padding:8px 9px;font-size:11.5px}
   /* Modal body padding */
@@ -232,6 +236,14 @@ body{overflow-x:hidden}
   .cl-action select,.cl-action>button,.cl-action>a{width:100%}
   /* Checklist task-row: wrap action icons below if needed */
   .task-row{flex-wrap:wrap;row-gap:6px}
+  /* Section heads: wrap action buttons */
+  .sec-head-row{flex-direction:column;gap:8px!important}
+  /* Package selector cards: single column on phones */
+  .pkg-grid{grid-template-columns:1fr!important}
+  /* Override panel cards: single column */
+  .rate-override-grid{grid-template-columns:1fr!important}
+  /* Discount variables: wrap value row */
+  .disc-val-row{flex-wrap:wrap}
 }
 `;
 
@@ -692,15 +704,15 @@ const StatCard = ({label,value,sub,icon:Ic,color='gold',trend})=>{
   const bg=color==='gold'?'var(--gold-pale)':color==='green'?'var(--success-pale)':color==='red'?'var(--danger-pale)':'var(--info-pale)';
   return(
     <div className="card-h stat-card" style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',padding:'18px 20px',boxShadow:'var(--sh-sm)',flex:'1 1 160px',minWidth:148}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
-        <div style={{width:36,height:36,background:bg,borderRadius:'var(--r-md)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-          <Ic size={16} color={clr}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+        <div style={{width:34,height:34,background:bg,borderRadius:'var(--r-md)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+          <Ic size={15} color={clr}/>
         </div>
         {trend!=null&&<span style={{fontSize:11,fontWeight:600,color:trend>=0?'var(--success)':'var(--danger)'}}>{trend>=0?'+':''}{trend}%</span>}
       </div>
-      <div style={{fontSize:24,fontWeight:600,color:'var(--tp)',lineHeight:1,marginBottom:4}}>{value}</div>
-      <div style={{fontSize:12,color:'var(--ts)',fontWeight:500}}>{label}</div>
-      {sub&&<div style={{fontSize:11,color:'var(--tm)',marginTop:3}}>{sub}</div>}
+      <div className="stat-val" style={{fontSize:24,fontWeight:600,color:'var(--tp)',lineHeight:1,marginBottom:3}}>{value}</div>
+      <div style={{fontSize:11,color:'var(--ts)',fontWeight:500,lineHeight:1.3}}>{label}</div>
+      {sub&&<div style={{fontSize:10,color:'var(--tm)',marginTop:2,lineHeight:1.3}}>{sub}</div>}
     </div>
   );
 };
@@ -2211,6 +2223,9 @@ const QuotationView = ({role})=>{
   const [editAddonPrice,setEditAddonPrice]=useState('');
   const [editPkgId,setEditPkgId]=useState(null);
   const [editPkgForm,setEditPkgForm]=useState({});
+  const [showAddPkg,setShowAddPkg]=useState(false);
+  const [newPkgForm,setNewPkgForm]=useState({name:'',base:0,margin:0.35});
+  const [deletePkgId,setDeletePkgId]=useState(null);
 
   const selPkg=pkgs.find(p=>p.id===selectedPkg);
   const addonTotal=addonsLib.filter(a=>selectedAddons.includes(a.id)).reduce((s,a)=>s+a.price,0);
@@ -2233,6 +2248,19 @@ const QuotationView = ({role})=>{
   const startEditPkg=(p)=>{setEditPkgId(p.id);setEditPkgForm({...p});};
   const saveEditPkg=()=>{setPkgs(prev=>prev.map(p=>p.id===editPkgId?{...editPkgForm,margin:Number(editPkgForm.margin)}:p));setEditPkgId(null);};
   const saveAddonPrice=()=>{setAddonsLib(prev=>prev.map(a=>a.id===editingAddon?{...a,price:Number(editAddonPrice)}:a));setEditingAddon(null);};
+  const addPkg=()=>{
+    if(!newPkgForm.name.trim()) return;
+    const id='pkg-'+Date.now();
+    setPkgs(prev=>[...prev,{id,name:newPkgForm.name.trim(),base:Number(newPkgForm.base)||0,margin:Number(newPkgForm.margin)||0.35}]);
+    setNewPkgForm({name:'',base:0,margin:0.35});
+    setShowAddPkg(false);
+  };
+  const confirmDeletePkg=(id)=>setDeletePkgId(id);
+  const deletePkg=()=>{
+    setPkgs(prev=>prev.filter(p=>p.id!==deletePkgId));
+    if(selectedPkg===deletePkgId) setSelectedPkg(pkgs.find(p=>p.id!==deletePkgId)?.id||'');
+    setDeletePkgId(null);
+  };
 
   return(
     <div className="fade-up">
@@ -2246,16 +2274,50 @@ const QuotationView = ({role})=>{
 
       {editRates&&(
         <div style={{background:'var(--gold-faint)',border:'1.5px solid rgba(184,146,74,.3)',borderRadius:'var(--r-lg)',padding:'20px',marginBottom:18,animation:'fadeUp .3s ease'}}>
-          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16,flexWrap:'wrap'}}>
             <Wrench size={14} color='var(--gold)'/>
-            <span style={{fontSize:13,fontWeight:600,color:'var(--gold)'}}>Base Rate Override Panel — Admin Only</span>
+            <span style={{fontSize:13,fontWeight:600,color:'var(--gold)',flex:1}}>Base Rate Override Panel — Admin Only</span>
+            <button onClick={()=>{setShowAddPkg(v=>!v);setEditPkgId(null);}} style={{padding:'6px 12px',background:showAddPkg?'var(--gold)':'var(--gold-pale)',color:showAddPkg?'#fff':'var(--gold)',border:`1.5px solid var(--gold-border)`,borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:5}}>
+              <Plus size={11}/>{showAddPkg?'Cancel':'Add Package'}
+            </button>
           </div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:12}}>
+
+          {/* Add new package form */}
+          {showAddPkg&&(
+            <div style={{background:'var(--surface)',border:`1.5px solid var(--gold)`,borderRadius:'var(--r-md)',padding:'14px',marginBottom:14,animation:'fadeUp .2s ease'}}>
+              <div style={{fontSize:11,fontWeight:700,color:'var(--gold)',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:10}}>New Package</div>
+              <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:4}}>Package Name</label>
+              <input type="text" className="edit-field" placeholder="e.g. Premium Gold" value={newPkgForm.name} onChange={e=>setNewPkgForm(f=>({...f,name:e.target.value}))} style={{marginBottom:10}}/>
+              <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:4}}>Base Price (₱)</label>
+              <input type="number" className="edit-field" value={newPkgForm.base} onChange={e=>setNewPkgForm(f=>({...f,base:e.target.value}))} style={{marginBottom:10}}/>
+              <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:4}}>Margin (0–1, e.g. 0.38)</label>
+              <input type="number" step="0.01" min="0" max="1" className="edit-field" value={newPkgForm.margin} onChange={e=>setNewPkgForm(f=>({...f,margin:e.target.value}))} style={{marginBottom:10}}/>
+              <button onClick={addPkg} disabled={!newPkgForm.name.trim()} style={{width:'100%',padding:'8px',background:'var(--success)',color:'#fff',border:'none',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:600,cursor:newPkgForm.name.trim()?'pointer':'not-allowed',opacity:newPkgForm.name.trim()?1:.5,display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+                <Plus size={12}/>Add Package
+              </button>
+            </div>
+          )}
+
+          {/* Delete confirm dialog */}
+          {deletePkgId&&(
+            <div style={{background:'var(--danger-pale)',border:`1.5px solid var(--danger-border)`,borderRadius:'var(--r-md)',padding:'14px',marginBottom:14,animation:'fadeUp .2s ease'}}>
+              <div style={{fontSize:12,fontWeight:600,color:'var(--danger)',marginBottom:8}}>Delete "{pkgs.find(p=>p.id===deletePkgId)?.name}"?</div>
+              <div style={{fontSize:11,color:'var(--ts)',marginBottom:12}}>This will permanently remove the package. Existing quotes using it are unaffected.</div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={deletePkg} style={{flex:1,padding:'7px',background:'var(--danger)',color:'#fff',border:'none',borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer'}}>Delete</button>
+                <button onClick={()=>setDeletePkgId(null)} style={{flex:1,padding:'7px',background:'var(--overlay)',color:'var(--ts)',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer'}}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          <div className="rate-override-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:12}}>
             {pkgs.map(p=>(
               <div key={p.id} style={{background:'var(--surface)',border:`1.5px solid ${editPkgId===p.id?'var(--gold)':'var(--border)'}`,borderRadius:'var(--r-md)',padding:'14px'}}>
                 <div style={{fontSize:12,fontWeight:600,color:'var(--tp)',marginBottom:10}}>{p.name}</div>
                 {editPkgId===p.id?(
                   <>
+                    <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:4}}>Package Name</label>
+                    <input type="text" className="edit-field" value={editPkgForm.name} onChange={e=>setEditPkgForm(f=>({...f,name:e.target.value}))} style={{marginBottom:10}}/>
                     <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:4}}>Base Price (₱)</label>
                     <input type="number" className="edit-field" value={editPkgForm.base} onChange={e=>setEditPkgForm(f=>({...f,base:Number(e.target.value)}))} style={{marginBottom:10}}/>
                     <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:4}}>Margin (%)</label>
@@ -2269,9 +2331,16 @@ const QuotationView = ({role})=>{
                   <>
                     <div style={{fontSize:16,fontWeight:700,color:'var(--tp)',fontFamily:"'DM Mono',monospace",marginBottom:4}}>{fmt(p.base)}</div>
                     <div style={{fontSize:11,color:'var(--tm)',marginBottom:10}}>{(p.margin*100).toFixed(0)}% margin</div>
-                    <button onClick={()=>startEditPkg(p)} aria-label={`Edit rates for ${p.name}`} style={{width:'100%',padding:'6px',background:'var(--gold-pale)',color:'var(--gold)',border:`1px solid var(--gold-border)`,borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:5}}>
-                      <Edit2 size={10} aria-hidden="true"/>Edit Rates
-                    </button>
+                    <div style={{display:'flex',gap:6}}>
+                      <button onClick={()=>startEditPkg(p)} aria-label={`Edit rates for ${p.name}`} style={{flex:1,padding:'6px',background:'var(--gold-pale)',color:'var(--gold)',border:`1px solid var(--gold-border)`,borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:5}}>
+                        <Edit2 size={10} aria-hidden="true"/>Edit
+                      </button>
+                      {pkgs.length>1&&(
+                        <button onClick={()=>confirmDeletePkg(p.id)} aria-label={`Delete ${p.name}`} style={{padding:'6px 10px',background:'var(--danger-pale)',color:'var(--danger)',border:`1px solid var(--danger-border)`,borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                          <Trash2 size={10}/>
+                        </button>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -2280,12 +2349,12 @@ const QuotationView = ({role})=>{
         </div>
       )}
 
-      <div className="g-2-side" style={{gap:18}}>
+      <div className="g-2-side" style={{gap:18,display:'grid'}}>
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
           {/* Package selector */}
           <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',padding:'20px',boxShadow:'var(--sh-sm)'}}>
             <span className="section-label">Base Package</span>
-            <div className="g-2" style={{gap:10}}>
+            <div className="g-2 pkg-grid" style={{gap:10}}>
               {pkgs.map(p=>(
                 <button key={p.id} onClick={()=>setSelectedPkg(p.id)} style={{padding:'14px 16px',border:`2px solid ${selectedPkg===p.id?'var(--gold)':'var(--border)'}`,borderRadius:'var(--r-md)',background:selectedPkg===p.id?'var(--gold-pale)':'var(--surface)',cursor:'pointer',textAlign:'left',transition:'all var(--t-base)'}}>
                   <div style={{fontSize:13,fontWeight:600,color:selectedPkg===p.id?'var(--gold)':'var(--tp)'}}>{p.name}</div>
@@ -3180,7 +3249,7 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
       </div>
 
       {/* Main content */}
-      <main className="admin-main" style={{marginLeft:'var(--sidebar-w)',flex:1,padding:'32px 36px',minHeight:'100vh',maxWidth:'calc(100vw - var(--sidebar-w))',overflowX:'hidden'}}>        <div style={{maxWidth:1100,margin:'0 auto'}}>
+      <main className="admin-main" style={{marginLeft:'var(--sidebar-w)',flex:1,padding:'32px 36px',minHeight:'100vh',overflowX:'hidden'}}>        <div style={{maxWidth:1100,margin:'0 auto'}}>
           {content[tab]}
         </div>
       </main>
