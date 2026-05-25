@@ -1096,10 +1096,53 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
 ══════════════════════════════════════════════════════ */
 const ChecklistView = ({role, events=[], staff=[], addLog})=>{
   if(!ACCESS[role].includes('checklist')) return <RoleBlock module="Master Checklist" role={role}/>;
-  const [items,setItems]=useState(()=>{try{const s=localStorage.getItem('metro_checklist');return s?JSON.parse(s):CHECKLIST_INIT;}catch(e){return CHECKLIST_INIT;}});
-  useEffect(()=>{try{localStorage.setItem('metro_checklist',JSON.stringify(items));}catch(e){}},[items]);
+  // Per-event checklist store: { [eventId]: { [category]: [...tasks] } }
+  const [allItems,setAllItems]=useState(()=>{try{const s=localStorage.getItem('metro_checklist_v2');return s?JSON.parse(s):{};}catch(e){return {};}});
+  // Write-through cache — keeps the current tab fast on reload
+  useEffect(()=>{try{localStorage.setItem('metro_checklist_v2',JSON.stringify(allItems));}catch(e){}},[allItems]);
+
+  // ── Cross-browser sync via Supabase ───────────────────────────────────────
+  const _skipSave=useRef(false);
+  useEffect(()=>{
+    // Initial load from Supabase (authoritative server state)
+    supabase.from('app_settings').select('value').eq('key','checklist_data').maybeSingle()
+      .then(({data})=>{
+        if(data?.value){try{_skipSave.current=true;setAllItems(JSON.parse(data.value));}catch(e){}}
+      });
+    // Live subscription — every browser sees changes the moment they're saved
+    const ch=supabase.channel('checklist-sync')
+      .on('postgres_changes',{event:'*',schema:'public',table:'app_settings',filter:'key=eq.checklist_data'},
+        ({new:row})=>{if(row?.value){try{_skipSave.current=true;setAllItems(JSON.parse(row.value));}catch(e){}}})
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[]);
+  // Debounced save to Supabase; skipped when the change came from a remote browser
+  const _saveTimer=useRef(null);
+  useEffect(()=>{
+    if(_skipSave.current){_skipSave.current=false;return;}
+    clearTimeout(_saveTimer.current);
+    _saveTimer.current=setTimeout(()=>{
+      supabase.from('app_settings')
+        .upsert({key:'checklist_data',value:JSON.stringify(allItems)},{onConflict:'key'})
+        .then(({error})=>{if(error)console.warn('[checklist] save failed:',error.message);});
+    },400);
+    return()=>clearTimeout(_saveTimer.current);
+  },[allItems]);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const [cat,setCat]=useState('Pre-Production');
   const [selEvent,setSelEvent]=useState(()=>events[0]?.id||null);
+  // Derive items for the selected event; fall back to the template for new events
+  const items=selEvent?(allItems[selEvent]??CHECKLIST_INIT):CHECKLIST_INIT;
+  // Scope all writes to the selected event only — this is what fixes "stays checked on event switch"
+  const setItems=(updater)=>{
+    if(!selEvent)return;
+    setAllItems(prev=>{
+      const cur=prev[selEvent]??CHECKLIST_INIT;
+      const next=typeof updater==='function'?updater(cur):updater;
+      return{...prev,[selEvent]:next};
+    });
+  };
   const [showAdd,setShowAdd]=useState(false);
   const [newLabel,setNewLabel]=useState('');
   const [delTaskConfirm,setDelTaskConfirm]=useState(null);
@@ -1144,9 +1187,9 @@ const ChecklistView = ({role, events=[], staff=[], addLog})=>{
     }));
   };
 
-  const allItems=Object.values(items).flat();
-  const done=allItems.filter(i=>i.done).length;
-  const pct=allItems.length>0?Math.round((done/allItems.length)*100):0;
+  const taskList=Object.values(items).flat();
+  const done=taskList.filter(i=>i.done).length;
+  const pct=taskList.length>0?Math.round((done/taskList.length)*100):0;
   const catPct=(c)=>{const arr=items[c];return arr.length>0?Math.round((arr.filter(i=>i.done).length/arr.length)*100):0;};
 
   return(
@@ -1171,7 +1214,7 @@ const ChecklistView = ({role, events=[], staff=[], addLog})=>{
           <span style={{fontSize:18,fontWeight:700,color:'var(--gold)',fontFamily:"'DM Mono',monospace"}}>{pct}%</span>
         </div>
         <div className="prog-bar"><div className="prog-fill" style={{width:`${pct}%`}}/></div>
-        <div style={{fontSize:11,color:'var(--tm)',marginTop:8}}>{done} of {allItems.length} tasks completed</div>
+        <div style={{fontSize:11,color:'var(--tm)',marginTop:8}}>{done} of {taskList.length} tasks completed</div>
       </div>
       <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
         {Object.keys(items).map(c=>{
