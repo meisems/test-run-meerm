@@ -250,6 +250,67 @@ body{overflow-x:hidden}
 /* ══════════════════════════════════════════════════════
    HELPERS
 ══════════════════════════════════════════════════════ */
+
+/* ══════════════════════════════════════════════════════
+   CROSS-BROWSER SYNC HOOK
+   Syncs any piece of state to Supabase app_settings so
+   every browser stays up to date via polling + realtime.
+   Usage: const [state, setState] = useSyncedState('key', initialValue)
+══════════════════════════════════════════════════════ */
+const useSyncedState = (supabaseKey, init, pollMs=5000) => {
+  const [state, setState] = useState(() => {
+    try { const s = localStorage.getItem(supabaseKey); return s ? JSON.parse(s) : init; } catch(e) { return init; }
+  });
+  const lastVal  = useRef('');
+  const skipSave = useRef(false);
+  const saveTimer= useRef(null);
+
+  // Stable fetch fn via ref — avoids stale closure in setInterval
+  const fetchFn = useRef(null);
+  fetchFn.current = () => {
+    supabase.from('app_settings').select('value').eq('key', supabaseKey).maybeSingle()
+      .then(({data}) => {
+        if(data?.value && data.value !== lastVal.current){
+          lastVal.current = data.value;
+          try { skipSave.current = true; setState(JSON.parse(data.value)); } catch(e) {}
+        }
+      });
+  };
+
+  useEffect(() => {
+    fetchFn.current(); // initial load
+    const ch = supabase.channel('sync-' + supabaseKey)
+      .on('postgres_changes', {event:'*', schema:'public', table:'app_settings'},
+        ({new:row}) => {
+          if(row?.key === supabaseKey && row.value && row.value !== lastVal.current){
+            lastVal.current = row.value;
+            try { skipSave.current = true; setState(JSON.parse(row.value)); } catch(e) {}
+          }
+        })
+      .subscribe();
+    const poll = setInterval(() => fetchFn.current(), pollMs);
+    return () => { supabase.removeChannel(ch); clearInterval(poll); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabaseKey]);
+
+  useEffect(() => {
+    if(skipSave.current){ skipSave.current = false; return; }
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      const serialized = JSON.stringify(state);
+      try { localStorage.setItem(supabaseKey, serialized); } catch(e) {}
+      lastVal.current = serialized;
+      supabase.from('app_settings')
+        .upsert({key: supabaseKey, value: serialized}, {onConflict: 'key'})
+        .then(({error}) => { if(error) console.warn('[sync:'+supabaseKey+'] save failed:', error.message); });
+    }, 400);
+    return () => clearTimeout(saveTimer.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  return [state, setState];
+};
+
 const fmt = n => '₱' + Number(n).toLocaleString('en-PH');
 
 const genCode = () => {
@@ -1097,57 +1158,7 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
 const ChecklistView = ({role, events=[], staff=[], addLog})=>{
   if(!ACCESS[role].includes('checklist')) return <RoleBlock module="Master Checklist" role={role}/>;
   // Per-event checklist store: { [eventId]: { [category]: [...tasks] } }
-  const [allItems,setAllItems]=useState(()=>{try{const s=localStorage.getItem('metro_checklist_v2');return s?JSON.parse(s):{};}catch(e){return {};}});
-  // Write-through cache — keeps the current tab fast on reload
-  useEffect(()=>{try{localStorage.setItem('metro_checklist_v2',JSON.stringify(allItems));}catch(e){}},[allItems]);
-
-  // ── Cross-browser sync via Supabase ───────────────────────────────────────
-  const _skipSave=useRef(false);
-  const _lastValue=useRef('');
-
-  const _fetchChecklist=()=>{
-    supabase.from('app_settings').select('value').eq('key','checklist_data').maybeSingle()
-      .then(({data})=>{
-        if(data?.value&&data.value!==_lastValue.current){
-          _lastValue.current=data.value;
-          try{_skipSave.current=true;setAllItems(JSON.parse(data.value));}catch(e){}
-        }
-      });
-  };
-
-  useEffect(()=>{
-    // Initial load
-    _fetchChecklist();
-    // Realtime subscription (works when app_settings is in supabase_realtime publication)
-    const ch=supabase.channel('checklist-sync')
-      .on('postgres_changes',{event:'*',schema:'public',table:'app_settings'},
-        ({new:row})=>{
-          if(row?.key==='checklist_data'&&row.value&&row.value!==_lastValue.current){
-            _lastValue.current=row.value;
-            try{_skipSave.current=true;setAllItems(JSON.parse(row.value));}catch(e){}
-          }
-        })
-      .subscribe();
-    // Polling fallback every 5 seconds — ensures other browsers always stay in sync
-    const poll=setInterval(_fetchChecklist,5000);
-    return()=>{supabase.removeChannel(ch);clearInterval(poll);};
-  },[]);
-
-  // Debounced save to Supabase; skipped when the change came from a remote browser
-  const _saveTimer=useRef(null);
-  useEffect(()=>{
-    if(_skipSave.current){_skipSave.current=false;return;}
-    clearTimeout(_saveTimer.current);
-    _saveTimer.current=setTimeout(()=>{
-      const serialized=JSON.stringify(allItems);
-      _lastValue.current=serialized;
-      supabase.from('app_settings')
-        .upsert({key:'checklist_data',value:serialized},{onConflict:'key'})
-        .then(({error})=>{if(error)console.warn('[checklist] save failed:',error.message);});
-    },400);
-    return()=>clearTimeout(_saveTimer.current);
-  },[allItems]);
-  // ─────────────────────────────────────────────────────────────────────────
+  const [allItems,setAllItems]=useSyncedState('checklist_data',{});
 
   const [cat,setCat]=useState('Pre-Production');
   const [selEvent,setSelEvent]=useState(()=>events[0]?.id||null);
@@ -1737,8 +1748,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
 ══════════════════════════════════════════════════════ */
 const WarehouseView = ({role,events=[],addLog})=>{
   if(!ACCESS[role].includes('warehouse')) return <RoleBlock module="Warehouse Inventory" role={role}/>;
-  const [inv,setInv]=useState(()=>{try{const s=localStorage.getItem('metro_inv');return s?JSON.parse(s):INVENTORY_INIT;}catch(e){return INVENTORY_INIT;}});
-  useEffect(()=>{try{localStorage.setItem('metro_inv',JSON.stringify(inv));}catch(e){}},[inv]);
+  const [inv,setInv]=useSyncedState('metro_inv',INVENTORY_INIT);
   const [search,setSearch]=useState('');
   const [editItem,setEditItem]=useState(null);
   const [editForm,setEditForm]=useState({});
@@ -2025,8 +2035,7 @@ const WarehouseView = ({role,events=[],addLog})=>{
 ══════════════════════════════════════════════════════ */
 const SupplierView = ({role,addLog})=>{
   if(!ACCESS[role].includes('supplier')) return <RoleBlock module="Supplier Hub" role={role}/>;
-  const [sups,setSups]=useState(()=>{try{const s=localStorage.getItem('metro_sups');return s?JSON.parse(s):SUPPLIERS_INIT;}catch(e){return SUPPLIERS_INIT;}});
-  useEffect(()=>{try{localStorage.setItem('metro_sups',JSON.stringify(sups));}catch(e){}},[sups]);
+  const [sups,setSups]=useSyncedState('metro_sups',SUPPLIERS_INIT);
   const [editSup,setEditSup]=useState(null);
   const [editForm,setEditForm]=useState({});
   const [upload,setUpload]=useState(null);
@@ -2289,10 +2298,8 @@ const ADDONS_INIT = [
 const QuotationView = ({role})=>{
   if(!ACCESS[role].includes('quotation')) return <RoleBlock module="Quotation & Margins" role={role}/>;
   const canOverride = role==='admin';
-  const [pkgs,setPkgs]=useState(()=>{try{const s=localStorage.getItem('metro_pkgs');return s?JSON.parse(s):BASE_PKGS_INIT;}catch(e){return BASE_PKGS_INIT;}});
-  useEffect(()=>{try{localStorage.setItem('metro_pkgs',JSON.stringify(pkgs));}catch(e){}},[pkgs]);
-  const [addonsLib,setAddonsLib]=useState(()=>{try{const s=localStorage.getItem('metro_addons');return s?JSON.parse(s):ADDONS_INIT;}catch(e){return ADDONS_INIT;}});
-  useEffect(()=>{try{localStorage.setItem('metro_addons',JSON.stringify(addonsLib));}catch(e){}},[addonsLib]);
+  const [pkgs,setPkgs]=useSyncedState('metro_pkgs',BASE_PKGS_INIT);
+  const [addonsLib,setAddonsLib]=useSyncedState('metro_addons',ADDONS_INIT);
   const [selectedPkg,setSelectedPkg]=useState('grand');
   const [selectedAddons,setSelectedAddons]=useState([]);
   const [discounts,setDiscounts]=useState([
