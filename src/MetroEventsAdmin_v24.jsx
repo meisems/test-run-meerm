@@ -258,6 +258,15 @@ body{overflow-x:hidden}
    Usage: const [state, setState] = useSyncedState('key', initialValue)
 ══════════════════════════════════════════════════════ */
 const useSyncedState = (supabaseKey, init, pollMs=5000) => {
+  // Use the service-role client for all Supabase operations in this hook.
+  // The admin user authenticates with hardcoded credentials and never signs
+  // into Supabase Auth, so the anon client is unauthenticated.  With RLS
+  // enabled the anon client silently fails every write — changes are never
+  // persisted and other browsers never receive them.
+  // supabaseAdmin (service role) bypasses RLS and always succeeds.
+  // Falls back to the anon client if the service key env var is absent (dev).
+  const db = supabaseAdmin ?? supabase;
+
   const [state, setState] = useState(() => {
     try { const s = localStorage.getItem(supabaseKey); return s ? JSON.parse(s) : init; } catch(e) { return init; }
   });
@@ -273,7 +282,7 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
   // Stable fetch fn via ref — avoids stale closure in setInterval
   const fetchFn = useRef(null);
   fetchFn.current = () => {
-    supabase.from('app_settings').select('value').eq('key', supabaseKey).maybeSingle()
+    db.from('app_settings').select('value').eq('key', supabaseKey).maybeSingle()
       .then(({data}) => {
         loaded.current = true; // allow saves from this point on
         if(data?.value && data.value !== lastVal.current){
@@ -285,7 +294,7 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
 
   useEffect(() => {
     fetchFn.current(); // initial load
-    const ch = supabase.channel('sync-' + supabaseKey)
+    const ch = db.channel('sync-' + supabaseKey)
       .on('postgres_changes', {event:'*', schema:'public', table:'app_settings'},
         ({new:row}) => {
           if(row?.key === supabaseKey && row.value && row.value !== lastVal.current){
@@ -295,7 +304,7 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
         })
       .subscribe();
     const poll = setInterval(() => fetchFn.current(), pollMs);
-    return () => { supabase.removeChannel(ch); clearInterval(poll); };
+    return () => { db.removeChannel(ch); clearInterval(poll); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabaseKey]);
 
@@ -307,9 +316,11 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
       const serialized = JSON.stringify(state);
       try { localStorage.setItem(supabaseKey, serialized); } catch(e) {}
       lastVal.current = serialized;
-      supabase.from('app_settings')
+      db.from('app_settings')
         .upsert({key: supabaseKey, value: serialized}, {onConflict: 'key'})
-        .then(({error}) => { if(error) console.warn('[sync:'+supabaseKey+'] save failed:', error.message); });
+        .then(({error}) => {
+          if(error) console.error('[sync:'+supabaseKey+'] save failed — check RLS policies and VITE_SUPABASE_SERVICE_KEY:', error.message);
+        });
     }, 400);
     return () => clearTimeout(saveTimer.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -875,8 +886,8 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
     if(idx<CRM_STAGES.length-1){
       const nextStage=CRM_STAGES[idx+1];
       setEvents(prev=>prev.map(e=>e.id===ev.id?{...e,stage:nextStage}:e));  // optimistic
-      supabase.from('events').update({stage:nextStage}).eq('id',ev.id)
-        .then(({error})=>{if(error)console.warn('[events] advance failed:',error.message);});
+      (supabaseAdmin??supabase).from('events').update({stage:nextStage}).eq('id',ev.id)
+        .then(({error})=>{if(error)console.error('[events] advance failed:',error.message);});
       addLog&&addLog(`Advanced event ${ev.id} to ${nextStage}`,ev.client,'info');
     }
   };
@@ -888,12 +899,13 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
   const saveEdit = ()=>{
     const updated={...editForm,id:sel.id};
     setEvents(prev=>prev.map(e=>e.id===sel.id?updated:e));  // optimistic
-    supabase.from('events').update({
+    // Use admin client: admin user has no Supabase auth session, anon writes blocked by RLS
+    (supabaseAdmin??supabase).from('events').update({
       client:updated.client, event_name:updated.event,
       date:updated.date, venue:updated.venue, pkg:updated.pkg,
       coord:updated.coord, value:updated.value,
       balance:updated.balance, stage:updated.stage,
-    }).eq('id',sel.id).then(({error})=>{if(error)console.warn('[events] update failed:',error.message);});
+    }).eq('id',sel.id).then(({error})=>{if(error)console.error('[events] update failed:',error.message);});
     addLog&&addLog(`Edited event ${sel.id}`,sel.client,'info');
     setSel(updated);
     setEditMode(false);
@@ -908,20 +920,21 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
     const newId='E-'+Date.now().toString(36).toUpperCase().slice(-5);
     const newEvent={...blankEvent,...addForm,id:newId};
     setEvents(prev=>[newEvent,...prev]);           // optimistic
-    supabase.from('events').insert({
+    // Use admin client: admin user has no Supabase auth session, anon writes blocked by RLS
+    (supabaseAdmin??supabase).from('events').insert({
       id:newId, client:newEvent.client, event_name:newEvent.event,
       date:newEvent.date, venue:newEvent.venue, pkg:newEvent.pkg,
       coord:newEvent.coord, value:newEvent.value,
       balance:newEvent.balance, stage:newEvent.stage,
-    }).then(({error})=>{if(error)console.warn('[events] insert failed:',error.message);});
+    }).then(({error})=>{if(error)console.error('[events] insert failed:',error.message);});
     addLog&&addLog(`Created event for ${addForm.client}`,newId,'info');
     setShowAdd(false);
   };
 
   const deleteEvent = (ev)=>{
     setEvents(prev=>prev.filter(e=>e.id!==ev.id));  // optimistic
-    supabase.from('events').delete().eq('id',ev.id)
-      .then(({error})=>{if(error)console.warn('[events] delete failed:',error.message);});
+    (supabaseAdmin??supabase).from('events').delete().eq('id',ev.id)
+      .then(({error})=>{if(error)console.error('[events] delete failed:',error.message);});
     addLog&&addLog(`Deleted event ${ev.id}`,ev.client,'warn');
     setDelConfirm(null);
     if(sel?.id===ev.id) setSel(null);
@@ -1457,7 +1470,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
 
   // v2.2 — permanent staff deletion
   const deleteStaff=async(s)=>{
-    const {error}=await supabase.from('profiles').delete().eq('id',s.id);
+    const {error}=await (supabaseAdmin??supabase).from('profiles').delete().eq('id',s.id);
     if(error){alert('Delete failed: '+error.message);return;}
     setStaff(prev=>prev.filter(m=>m.id!==s.id));
     addLog&&addLog(`Deleted staff profile for ${s.name}`,s.id,'warn');
@@ -1479,7 +1492,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
 
     if(editStaffId){
       // UPDATE existing profile (password not touched — use ChangePasswordModal for that)
-      const {error}=await supabase.from('profiles').update({
+      const {error}=await (supabaseAdmin??supabase).from('profiles').update({
         username:form.username.trim(),
         role:form.role,
         full_name:form.name,
@@ -1539,7 +1552,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
         return;
       }
 
-      const {error:upsertErr}=await supabase.from('profiles').upsert({
+      const {error:upsertErr}=await (supabaseAdmin??supabase).from('profiles').upsert({
         id:newUser.id,
         username:form.username.trim(),
         role:form.role,
@@ -1549,7 +1562,7 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       });
       if(upsertErr){setFormErr('Auth account created but profile save failed: '+upsertErr.message);return;}
 
-      const {data:updated}=await supabase.from('profiles').select('*');
+      const {data:updated}=await (supabaseAdmin??supabase).from('profiles').select('*');
       if(updated) setStaff(updated.map(s=>({...s, name: s.name ?? s.full_name ?? '', active: s.active ?? true})));
       addLog&&addLog(`Added new staff member ${form.name} (${form.role})`,newUser.id,'info');
     }
@@ -2603,9 +2616,10 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
     if(codeEdit[r]&&codeEdit[r].trim()){
       const newVal=codeEdit[r].trim();
       setAccessCodes(p=>({...p,[r]:newVal}));
-      // Persist to Supabase so all browsers get the updated code
-      supabase.from('app_settings').upsert({key:'access_code_'+r,value:newVal},{onConflict:'key'})
-        .then(({error})=>{if(error)console.warn('[access_code] save failed:',error.message);});
+      // Persist to Supabase so all browsers get the updated code.
+      // supabaseAdmin bypasses RLS — admin user has no Supabase auth session.
+      (supabaseAdmin??supabase).from('app_settings').upsert({key:'access_code_'+r,value:newVal},{onConflict:'key'})
+        .then(({error})=>{if(error)console.error('[access_code] save failed — check VITE_SUPABASE_SERVICE_KEY and RLS:',error.message);});
       addLog&&addLog(`Updated access code for ${r} role`,r,'warn');
     }
     setCodeEdit(p=>{const n={...p};delete n[r];return n;});
@@ -2616,9 +2630,10 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
     const newCode=genCode();
     setTimeout(()=>{
       setAccessCodes(p=>({...p,[r]:newCode}));
-      // Persist rotated code to Supabase so all browsers get the new code
-      supabase.from('app_settings').upsert({key:'access_code_'+r,value:newCode},{onConflict:'key'})
-        .then(({error})=>{if(error)console.warn('[access_code] rotate failed:',error.message);});
+      // Persist rotated code to Supabase so all browsers get the new code.
+      // supabaseAdmin bypasses RLS — admin user has no Supabase auth session.
+      (supabaseAdmin??supabase).from('app_settings').upsert({key:'access_code_'+r,value:newCode},{onConflict:'key'})
+        .then(({error})=>{if(error)console.error('[access_code] rotate failed — check VITE_SUPABASE_SERVICE_KEY and RLS:',error.message);});
       addLog&&addLog(`Rotated access code for ${r} role`,r,'warn');
       setRotateAnim(p=>({...p,[r]:false}));
     },600);
@@ -3213,11 +3228,15 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
   });
 
   useEffect(()=>{
+    // Use admin client for events reads/writes: admin user has no Supabase auth
+    // session so the anon client is blocked by RLS on both SELECT and mutations.
+    const evDb = supabaseAdmin ?? supabase;
+
     // Step 1: initial full load
-    supabase.from('events').select('*').order('created_at',{ascending:false})
+    evDb.from('events').select('*').order('created_at',{ascending:false})
       .then(({data,error})=>{
         if(error){
-          console.warn('[events] initial fetch failed:',error.message);
+          console.error('[events] initial fetch failed — check RLS or VITE_SUPABASE_SERVICE_KEY:',error.message);
           setEventsLoading(false);
           return;
         }
@@ -3226,12 +3245,12 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
         setEvents(prev=>{
           const localOnly=prev.filter(e=>!remoteIds.has(e.id));
           if(localOnly.length>0){
-            supabase.from('events').upsert(localOnly.map(e=>({
+            evDb.from('events').upsert(localOnly.map(e=>({
               id:e.id,client:e.client,event_name:e.event,date:e.date,
               venue:e.venue,pkg:e.pkg,coord:e.coord,
               value:e.value,balance:e.balance,stage:e.stage,
             }))).then(({error:uErr})=>{
-              if(uErr) console.warn('[events] local-only push failed:',uErr.message);
+              if(uErr) console.error('[events] local-only push failed:',uErr.message);
             });
           }
           return [...remote,...localOnly];
@@ -3240,7 +3259,7 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
       });
 
     // Step 2: live subscription — every browser sees changes immediately
-    const channel = supabase
+    const channel = evDb
       .channel('events-realtime')
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'events'},
         ({new:row})=>{ setEvents(prev=>prev.find(e=>e.id===row.id)?prev:[toLocal(row),...prev]); })
@@ -3253,7 +3272,7 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
         if(status==='CHANNEL_ERROR') console.warn('[events] realtime error — enable Realtime in Supabase dashboard for the events table');
       });
 
-    return ()=>{ supabase.removeChannel(channel); };
+    return ()=>{ evDb.removeChannel(channel); };
   },[]);
   const [showChangePw,setShowChangePw]=useState(false);
 
@@ -3263,9 +3282,10 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
     const localId='L-'+Date.now();
     // Optimistic local update so the UI reflects immediately
     setAuditLogs(prev=>[{id:localId,ts,user:user.name,role:user.role,action,target,sev},...prev].slice(0,500));
-    // Persist to Supabase so all browsers see the entry
-    supabase.from('audit_logs').insert({ts,user_name:user.name,role:user.role,action,target,sev})
-      .then(({error})=>{if(error)console.warn('[audit] write failed:',error.message);});
+    // Persist to Supabase so all browsers see the entry.
+    // Admin has no Supabase auth session — use service-role client to bypass RLS.
+    (supabaseAdmin??supabase).from('audit_logs').insert({ts,user_name:user.name,role:user.role,action,target,sev})
+      .then(({error})=>{if(error)console.error('[audit] write failed:',error.message);});
   };
 
   const allowed=ACCESS[user.role]||[];
@@ -3505,8 +3525,9 @@ export default function AdminApp(){
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ user: adminUser, view: "shell" })); } catch(e) {}
       const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
       setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: 'Administrator', role: 'admin', action: 'Logged in', target: username, sev: 'info' }, ...prev]);
-      supabase.from('audit_logs').insert({ts, user_name:'Administrator', role:'admin', action:'Logged in', target:username, sev:'info'})
-        .then(({error})=>{if(error)console.warn('[audit] login write failed:',error.message);});
+      // Admin has no Supabase auth session — use service-role client to bypass RLS
+      (supabaseAdmin??supabase).from('audit_logs').insert({ts, user_name:'Administrator', role:'admin', action:'Logged in', target:username, sev:'info'})
+        .then(({error})=>{if(error)console.error('[audit] login write failed:',error.message);});
       return;
     }
 
@@ -3539,8 +3560,8 @@ export default function AdminApp(){
 
     const ts = new Date().toLocaleString('en-PH', { timeZone: 'Asia/Manila', hour12: false });
     setAuditLogs(prev => [{ id: 'L-' + Date.now(), ts, user: profileData.full_name, role: profileData.role, action: 'Logged in', target: profileData.username, sev: 'info' }, ...prev]);
-    supabase.from('audit_logs').insert({ts, user_name:profileData.full_name, role:profileData.role, action:'Logged in', target:profileData.username, sev:'info'})
-      .then(({error})=>{if(error)console.warn('[audit] login write failed:',error.message);});
+    (supabaseAdmin??supabase).from('audit_logs').insert({ts, user_name:profileData.full_name, role:profileData.role, action:'Logged in', target:profileData.username, sev:'info'})
+      .then(({error})=>{if(error)console.error('[audit] login write failed:',error.message);});
   };
 
   const handleLogout = async () => {
