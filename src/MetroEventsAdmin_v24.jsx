@@ -2555,6 +2555,154 @@ const QuotationView = ({role})=>{
     setDeletePkgId(null);
   };
 
+  const generateProposal=()=>{
+    const today=new Date().toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'});
+    const refNo='PROP-'+Date.now().toString(36).toUpperCase();
+    const activeAddons=addonsLib.filter(a=>selectedAddons.includes(a.id));
+    const activeDiscounts=discounts.filter(d=>d.active);
+    const fmtPHP=n=>'&#x20B1;'+Number(n).toLocaleString('en-PH');
+    const marginColor=gpPct>=35&&gpPct<=50?'#b8924a':gpPct<35?'#e53e3e':'#38a169';
+
+    const addonRows=activeAddons.length>0
+      ? activeAddons.map(a=>`
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0ede8;color:#555;">${a.label}</td>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0ede8;text-align:right;font-family:'Courier New',monospace;color:#2d2a24;">${fmtPHP(a.price)}</td>
+          </tr>`).join('')
+      : `<tr><td colspan="2" style="padding:10px 14px;border-bottom:1px solid #f0ede8;color:#aaa;font-style:italic;">No add-ons selected</td></tr>`;
+
+    const discountRows=activeDiscounts.length>0
+      ? activeDiscounts.map(d=>`
+          <div class="total-row disc">
+            <span>${d.label}${d.sub?` <span style="font-size:11px;color:#888">(${d.sub})</span>`:''}</span>
+            <span style="font-family:'Courier New',monospace">-${d.type==='percent'?`${d.value}% (${fmtPHP(Math.round(subtotal*(d.value/100)))})`:`${fmtPHP(d.value)}`}</span>
+          </div>`).join('')
+      : '';
+
+    const html=`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Metro Events Proposal ${refNo}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Georgia',serif;background:#fdfaf6;color:#2d2a24;font-size:14px;line-height:1.7}
+    @page{margin:20mm 18mm}
+    @media print{body{background:#fff}.no-print{display:none!important}}
+    .wrap{max-width:780px;margin:0 auto;padding:40px 32px}
+    .header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:28px;border-bottom:3px solid #b8924a;margin-bottom:32px}
+    .brand-name{font-size:26px;font-weight:700;letter-spacing:.06em;color:#1a1714}
+    .brand-tag{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#b8924a;font-family:Arial,sans-serif;margin-top:4px}
+    .meta{text-align:right;font-size:12px;color:#888;line-height:1.9;font-family:Arial,sans-serif}
+    .meta strong{color:#2d2a24;font-size:13px}
+    .section-title{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#b8924a;margin-bottom:14px;font-family:Arial,sans-serif}
+    .pkg-box{background:#1a1714;border-radius:8px;padding:22px 26px;margin-bottom:28px;display:flex;justify-content:space-between;align-items:center}
+    .pkg-name{font-size:20px;font-weight:600;color:#f8f4ed}
+    .pkg-price{font-size:24px;font-weight:700;color:#b8924a;font-family:'Courier New',monospace}
+    .pkg-sub{font-size:11px;color:#9a8c7c;margin-top:4px;font-family:Arial,sans-serif}
+    table{width:100%;border-collapse:collapse;margin-bottom:28px}
+    thead tr{background:#1a1714}
+    thead th{padding:11px 14px;text-align:left;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#b8924a;font-family:Arial,sans-serif}
+    thead th:last-child{text-align:right}
+    .totals-box{background:#f8f4ed;border-radius:8px;padding:22px 26px;margin-bottom:28px}
+    .total-row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;font-family:Arial,sans-serif}
+    .total-row.sub{color:#777;border-bottom:1px solid #e8e2d8}
+    .total-row.disc{color:#38a169}
+    .total-row.grand{font-size:20px;font-weight:700;color:#1a1714;padding-top:14px;margin-top:8px;border-top:2px solid #b8924a}
+    .total-row.grand span:last-child{color:#b8924a;font-family:'Courier New',monospace}
+    .margin-box{background:#1a1714;border-radius:8px;padding:22px 26px;margin-bottom:28px}
+    .m-title{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#b8924a;margin-bottom:14px;font-family:Arial,sans-serif}
+    .m-row{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;font-family:Arial,sans-serif;color:#b8bfcc}
+    .m-row span:last-child{font-family:'Courier New',monospace;font-weight:600}
+    .prog-bg{background:rgba(255,255,255,.1);border-radius:99px;height:7px;margin-top:14px;overflow:hidden}
+    .prog-fill{height:100%;border-radius:99px;background:${marginColor};width:${Math.min(gpPct,100)}%}
+    .m-note{font-size:11px;margin-top:8px;font-family:Arial,sans-serif;color:${gpPct<35?'#fc8181':'#68d391'}}
+    .validity{background:#fffbf0;border:1px solid #e8d9aa;border-radius:6px;padding:12px 16px;margin-bottom:28px;font-size:12px;color:#7a6630;font-family:Arial,sans-serif}
+    .validity strong{color:#b8924a}
+    .footer{border-top:1px solid #e8e2d8;padding-top:22px;font-size:11px;color:#aaa;text-align:center;line-height:1.9;font-family:Arial,sans-serif}
+    .print-btn{position:fixed;bottom:28px;right:28px;padding:13px 24px;background:#b8924a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 18px rgba(184,146,74,.4);font-family:Arial,sans-serif}
+    .print-btn:hover{background:#a07c3c}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div>
+      <div class="brand-name">Metro Events</div>
+      <div class="brand-tag">Premium Event Management</div>
+    </div>
+    <div class="meta">
+      <strong>Event Proposal</strong><br/>
+      Ref: ${refNo}<br/>
+      Date: ${today}<br/>
+      Valid: <strong>30 days</strong>
+    </div>
+  </div>
+
+  <div class="validity">
+    <strong>Proposal Validity:</strong> This quotation is valid for 30 days from the date of issuance.
+    To confirm your booking, a 50% downpayment is required upon acceptance.
+  </div>
+
+  <div class="section-title">Selected Package</div>
+  <div class="pkg-box">
+    <div>
+      <div class="pkg-name">${selPkg.name}</div>
+      <div class="pkg-sub">Base event package</div>
+    </div>
+    <div style="text-align:right">
+      <div class="pkg-price">${fmtPHP(selPkg.base)}</div>
+    </div>
+  </div>
+
+  <div class="section-title">Add-On Services</div>
+  <table>
+    <thead><tr><th>Service</th><th style="text-align:right">Price</th></tr></thead>
+    <tbody>
+      ${addonRows}
+      <tr style="background:#f8f4ed">
+        <td style="padding:10px 14px;font-weight:700;color:#2d2a24;font-family:Arial,sans-serif">Add-ons Subtotal</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:700;font-family:'Courier New',monospace;color:#2d2a24">${fmtPHP(addonTotal)}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="section-title">Pricing Summary</div>
+  <div class="totals-box">
+    <div class="total-row sub"><span>Base Package</span><span style="font-family:'Courier New',monospace">${fmtPHP(selPkg.base)}</span></div>
+    <div class="total-row sub"><span>Add-ons Total</span><span style="font-family:'Courier New',monospace">${fmtPHP(addonTotal)}</span></div>
+    <div class="total-row sub" style="font-weight:600;color:#2d2a24;padding:10px 0"><span>Subtotal</span><span style="font-family:'Courier New',monospace">${fmtPHP(subtotal)}</span></div>
+    ${discountRows}
+    <div class="total-row grand"><span>Total Amount Due</span><span>${fmtPHP(total)}</span></div>
+  </div>
+
+  <div class="section-title">Internal Margin Analysis</div>
+  <div class="margin-box">
+    <div class="m-title">Confidential — Internal Use Only</div>
+    <div class="m-row"><span>Estimated Cost</span><span style="color:#ccc">${fmtPHP(cost)}</span></div>
+    <div class="m-row"><span>Gross Profit</span><span style="color:#ccc">${fmtPHP(grossProfit)}</span></div>
+    <div class="m-row"><span>GP Margin</span><span style="color:${marginColor}">${gpPct}%</span></div>
+    <div class="prog-bg"><div class="prog-fill"></div></div>
+    <div class="m-note">${gpPct<35?'Below target margin (35\u201345%). Consider reducing discounts or adding services.':'\u2713 Healthy margin \u2014 within the 35\u201345% target range.'}</div>
+  </div>
+
+  <div class="footer">
+    <p>Metro Events Administration System &middot; Generated ${today}</p>
+    <p>This document is computer-generated. For inquiries, reference proposal <strong style="color:#b8924a">${refNo}</strong>.</p>
+  </div>
+</div>
+<button class="print-btn no-print" onclick="window.print()">\uD83D\uDDA8 Print / Save as PDF</button>
+</body>
+</html>`;
+
+    const blob=new Blob([html],{type:'text/html'});
+    const url=URL.createObjectURL(blob);
+    const win=window.open(url,'_blank');
+    if(!win) alert('Popup blocked — please allow popups for this site to generate proposals.');
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+  };
+
   return(
     <div className="fade-up">
       <SectionHead title="Quotation & Margins" sub="Dynamic pricing engine with full rate overrides, add-on pricing edits, and flexible discount controls."
@@ -2806,7 +2954,7 @@ const QuotationView = ({role})=>{
                 </div>
               </div>
             </div>
-            <GoldBtn onClick={()=>{}} full style={{marginTop:16}}>Generate Proposal <Download size={13}/></GoldBtn>
+            <GoldBtn onClick={generateProposal} full style={{marginTop:16}}>Generate Proposal <Download size={13}/></GoldBtn>
           </div>
         </div>
       </div>
