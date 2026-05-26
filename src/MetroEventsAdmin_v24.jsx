@@ -517,7 +517,9 @@ const Field = ({label,type='text',value,onChange,placeholder,options,rows,hint})
   );
 };
 
-const Modal = ({title,onClose,children,wide,extraWide})=>{
+// footer prop: pass the action buttons here so they render in a sticky bar
+// at the bottom of the modal — always visible on mobile even with keyboard open.
+const Modal = ({title,onClose,children,wide,extraWide,footer})=>{
   const titleId=`modal-title-${Math.random().toString(36).slice(2,7)}`;
   useEffect(()=>{
     const originalOverflow=document.body.style.overflow;
@@ -531,14 +533,16 @@ const Modal = ({title,onClose,children,wide,extraWide})=>{
       aria-labelledby={titleId}
       onClick={onClose}
       style={{
+        // Backdrop: just the dark scrim, no scrolling here.
+        // Scrolling on position:fixed is unreliable on Android Chrome when
+        // the virtual keyboard is open — the inner modal box scrolls instead.
         position:'fixed',inset:0,zIndex:9999,
         background:'rgba(0,0,0,0.7)',
         display:'flex',
-        alignItems:'center',
+        alignItems:'flex-start',
         justifyContent:'center',
-        overflowY:'auto',
-        padding:'20px',
-        minHeight:'100vh',
+        padding:'16px',
+        paddingBottom:'24px',
       }}
     >
       <div
@@ -547,16 +551,26 @@ const Modal = ({title,onClose,children,wide,extraWide})=>{
           background:'var(--surface)',
           border:'1px solid var(--border)',
           borderRadius:'var(--r-xl)',
-          padding:'16px 20px',
           width:'100%',
           maxWidth:extraWide?820:wide?640:440,
-          maxHeight:'92vh',
-          overflowY:'auto',
+          // Inner box is the scroll container — reliable on all mobile browsers.
+          // 100svh = small viewport height (excludes browser chrome + keyboard).
+          // Falls back to 100vh on older browsers — still better than fixed backdrop scroll.
+          maxHeight:'calc(100svh - 32px)',
+          display:'flex',
+          flexDirection:'column',
           boxShadow:'var(--sh-lg)',
           animation:'fadeUp .3s ease both',
+          marginTop: 0,
         }}
       >
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+        {/* Header — never scrolls away */}
+        <div style={{
+          display:'flex',alignItems:'center',justifyContent:'space-between',
+          padding:'16px 20px 12px',
+          borderBottom:'1px solid var(--border)',
+          flexShrink:0,
+        }}>
           <h3 id={titleId} style={{fontSize:16,fontWeight:600,color:'var(--tp)'}}>{title}</h3>
           <button
             onClick={onClose}
@@ -564,7 +578,31 @@ const Modal = ({title,onClose,children,wide,extraWide})=>{
             style={{background:'none',border:'none',cursor:'pointer',color:'var(--tm)',display:'flex',borderRadius:'var(--r-sm)',padding:4}}
           ><X size={18} aria-hidden="true"/></button>
         </div>
-        {children}
+
+        {/* Scrollable body */}
+        <div style={{
+          overflowY:'auto',
+          WebkitOverflowScrolling:'touch', // smooth momentum scroll on iOS
+          flex:1,
+          padding:'16px 20px',
+        }}>
+          {children}
+        </div>
+
+        {/* Sticky footer — buttons always visible above the keyboard */}
+        {footer&&(
+          <div style={{
+            flexShrink:0,
+            padding:'12px 20px',
+            borderTop:'1px solid var(--border)',
+            background:'var(--surface)',
+            display:'flex',gap:10,justifyContent:'flex-end',
+            borderBottomLeftRadius:'var(--r-xl)',
+            borderBottomRightRadius:'var(--r-xl)',
+          }}>
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -829,12 +867,32 @@ const DashboardView = ({events,role,staff=[]})=>{
   const active = events.filter(e=>!['Done','New Inquiry'].includes(e.stage));
   const pipeline = events.reduce((s,e)=>s+e.value,0);
   const outstanding = events.reduce((s,e)=>s+e.balance,0);
+
+  // Real month-over-month trend: compare this calendar month vs last month
+  // using each event's date field.  Returns null if there's no prior-month
+  // data (avoids showing a meaningless +∞% on a fresh install).
+  const now = new Date();
+  const tm = now.getMonth(), ty = now.getFullYear();
+  const lm = tm === 0 ? 11 : tm - 1;
+  const ly = tm === 0 ? ty - 1 : ty;
+  const inMonth = (e, mo, yr) => { const d = new Date(e.date); return d.getMonth()===mo && d.getFullYear()===yr; };
+  const thisMonthEvs  = events.filter(e=>inMonth(e,tm,ty));
+  const lastMonthEvs  = events.filter(e=>inMonth(e,lm,ly));
+  const thisPipeline  = thisMonthEvs.reduce((s,e)=>s+e.value,0);
+  const lastPipeline  = lastMonthEvs.reduce((s,e)=>s+e.value,0);
+  const activeStages  = ['Reserved','Fully Booked','In Progress','Ocular Scheduled'];
+  const thisActive    = thisMonthEvs.filter(e=>activeStages.includes(e.stage)).length;
+  const lastActive    = lastMonthEvs.filter(e=>activeStages.includes(e.stage)).length;
+  const pctChange     = (cur,prev) => prev===0 ? null : Math.round(((cur-prev)/prev)*100);
+  const pipelineTrend = pctChange(thisPipeline, lastPipeline);
+  const activeTrend   = pctChange(thisActive,   lastActive);
+
   return(
     <div className="fade-up">
       <SectionHead title="Command Dashboard" sub={`Good morning. ${active.length} events are actively in progress.`}/>
       <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:28}}>
-        <StatCard label="Revenue Pipeline" value={fmt(pipeline)} sub="All active events" icon={TrendingUp} color="gold" trend={12}/>
-        <StatCard label="Active Events" value={active.length} sub="Reserved or above" icon={Calendar} color="blue" trend={5}/>
+        <StatCard label="Revenue Pipeline" value={fmt(pipeline)} sub="All active events" icon={TrendingUp} color="gold" trend={pipelineTrend}/>
+        <StatCard label="Active Events" value={active.length} sub="Reserved or above" icon={Calendar} color="blue" trend={activeTrend}/>
         <StatCard label="Outstanding" value={fmt(outstanding)} sub="Unpaid client balances" icon={DollarSign} color="red"/>
         <StatCard label="Staff On Duty" value={staff.filter(s=>s.active).length} sub="Active staff members" icon={Users} color="green"/>
       </div>
@@ -1105,7 +1163,12 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
 
       {/* Add Event Modal */}
       {showAdd&&(
-        <Modal title="Add New Event" onClose={()=>setShowAdd(false)} extraWide>
+        <Modal title="Add New Event" onClose={()=>setShowAdd(false)} extraWide
+          footer={<>
+            <GhostBtn onClick={()=>setShowAdd(false)}>Cancel</GhostBtn>
+            <GoldBtn onClick={addEvent} disabled={!addForm.client?.trim()}><Plus size={13}/>Create Event</GoldBtn>
+          </>}
+        >
           <div className="g-2" style={{gap:12,marginBottom:14}}>
             {[
               {label:'Client Name',key:'client',placeholder:'e.g. Santos Family'},
@@ -1148,10 +1211,6 @@ const CRMView = ({events,setEvents,role,staff=[],addLog})=>{
             </div>
           </div>
           {!addForm.client?.trim()&&<div style={{fontSize:12,color:'var(--danger)',marginBottom:10,display:'flex',alignItems:'center',gap:5}}><AlertCircle size={12}/>Client name is required.</div>}
-          <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
-            <GhostBtn onClick={()=>setShowAdd(false)}>Cancel</GhostBtn>
-            <GoldBtn onClick={addEvent} disabled={!addForm.client?.trim()}><Plus size={13}/>Create Event</GoldBtn>
-          </div>
         </Modal>
       )}
 
@@ -1392,7 +1451,12 @@ const ChecklistView = ({role, events=[], staff=[], addLog})=>{
       </div>
 
       {showAdd&&(
-        <Modal title={`Add Task — ${cat}`} onClose={()=>setShowAdd(false)}>
+        <Modal title={`Add Task — ${cat}`} onClose={()=>setShowAdd(false)}
+          footer={<>
+            <GhostBtn onClick={()=>setShowAdd(false)}>Cancel</GhostBtn>
+            <GoldBtn onClick={addTask} disabled={!newLabel.trim()}><Plus size={13}/>Add Task</GoldBtn>
+          </>}
+        >
           <div style={{marginBottom:16}}>
             <label style={{fontSize:11,fontWeight:600,color:'var(--ts)',letterSpacing:'.05em',display:'block',marginBottom:5,textTransform:'uppercase'}}>Task Description</label>
             <input
@@ -1404,10 +1468,6 @@ const ChecklistView = ({role, events=[], staff=[], addLog})=>{
               placeholder="e.g. Confirm venue floor plan with client"
             />
             {!newLabel.trim()&&<div style={{fontSize:11,color:'var(--tm)',marginTop:5}}>Press Enter or click Add Task to save.</div>}
-          </div>
-          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-            <GhostBtn onClick={()=>setShowAdd(false)}>Cancel</GhostBtn>
-            <GoldBtn onClick={addTask} disabled={!newLabel.trim()}><Plus size={13}/>Add Task</GoldBtn>
           </div>
         </Modal>
       )}
@@ -1653,7 +1713,12 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
       </div>
 
       {showAddModal&&(
-        <Modal title={editStaffId?'Edit Staff Profile':'Add New Staff Member'} onClose={()=>setShowAddModal(false)} wide>
+        <Modal title={editStaffId?'Edit Staff Profile':'Add New Staff Member'} onClose={()=>setShowAddModal(false)} wide
+          footer={<>
+            <GhostBtn onClick={()=>setShowAddModal(false)}>Cancel</GhostBtn>
+            <GoldBtn onClick={saveStaff}><ShieldCheck size={13}/>{editStaffId?'Save Changes':'Create Profile'}</GoldBtn>
+          </>}
+        >
           {/* 2FA notice banner */}
           <div style={{padding:'10px 14px',background:'var(--navy)',borderRadius:'var(--r-md)',marginBottom:18,display:'flex',gap:10,alignItems:'center'}}>
             <ShieldCheck size={16} color='var(--gold)' aria-hidden="true"/>
@@ -1712,10 +1777,6 @@ const CrewView = ({role:userRole,accessCodes,staff,setStaff,currentUserId,addLog
               <AlertCircle size={13} aria-hidden="true"/>{formErr}
             </div>
           )}
-          <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
-            <GhostBtn onClick={()=>setShowAddModal(false)}>Cancel</GhostBtn>
-            <GoldBtn onClick={saveStaff}><ShieldCheck size={13}/>{editStaffId?'Save Changes':'Create Profile'}</GoldBtn>
-          </div>
         </Modal>
       )}
 
@@ -1971,7 +2032,12 @@ const WarehouseView = ({role,events=[],addLog})=>{
 
       {/* Add Inventory Item Modal */}
       {showAddInv&&(
-        <Modal title="Add Inventory Item" onClose={()=>setShowAddInv(false)} wide>
+        <Modal title="Add Inventory Item" onClose={()=>setShowAddInv(false)} wide
+          footer={<>
+            <GhostBtn onClick={()=>setShowAddInv(false)}>Cancel</GhostBtn>
+            <GoldBtn onClick={addInvItem} disabled={!addInvForm.item?.trim()}><Plus size={13}/>Add to Inventory</GoldBtn>
+          </>}
+        >
           <div className="g-2" style={{gap:12,marginBottom:14}}>
             <div style={{gridColumn:'1/-1'}}>
               <label style={{fontSize:11,fontWeight:600,color:'var(--ts)',letterSpacing:'.05em',display:'block',marginBottom:5,textTransform:'uppercase'}}>Item Name</label>
@@ -2007,10 +2073,6 @@ const WarehouseView = ({role,events=[],addLog})=>{
             </div>
           </div>
           {!addInvForm.item?.trim()&&<div style={{fontSize:12,color:'var(--danger)',marginBottom:10,display:'flex',alignItems:'center',gap:5}}><AlertCircle size={12}/>Item name is required.</div>}
-          <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
-            <GhostBtn onClick={()=>setShowAddInv(false)}>Cancel</GhostBtn>
-            <GoldBtn onClick={addInvItem} disabled={!addInvForm.item?.trim()}><Plus size={13}/>Add to Inventory</GoldBtn>
-          </div>
         </Modal>
       )}
 
