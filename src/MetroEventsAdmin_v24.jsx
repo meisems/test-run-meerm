@@ -1103,27 +1103,46 @@ const ChecklistView = ({role, events=[], staff=[], addLog})=>{
 
   // ── Cross-browser sync via Supabase ───────────────────────────────────────
   const _skipSave=useRef(false);
-  useEffect(()=>{
-    // Initial load from Supabase (authoritative server state)
+  const _lastValue=useRef('');
+
+  const _fetchChecklist=()=>{
     supabase.from('app_settings').select('value').eq('key','checklist_data').maybeSingle()
       .then(({data})=>{
-        if(data?.value){try{_skipSave.current=true;setAllItems(JSON.parse(data.value));}catch(e){}}
+        if(data?.value&&data.value!==_lastValue.current){
+          _lastValue.current=data.value;
+          try{_skipSave.current=true;setAllItems(JSON.parse(data.value));}catch(e){}
+        }
       });
-    // Live subscription — every browser sees changes the moment they're saved
+  };
+
+  useEffect(()=>{
+    // Initial load
+    _fetchChecklist();
+    // Realtime subscription (works when app_settings is in supabase_realtime publication)
     const ch=supabase.channel('checklist-sync')
-      .on('postgres_changes',{event:'*',schema:'public',table:'app_settings',filter:'key=eq.checklist_data'},
-        ({new:row})=>{if(row?.value){try{_skipSave.current=true;setAllItems(JSON.parse(row.value));}catch(e){}}})
+      .on('postgres_changes',{event:'*',schema:'public',table:'app_settings'},
+        ({new:row})=>{
+          if(row?.key==='checklist_data'&&row.value&&row.value!==_lastValue.current){
+            _lastValue.current=row.value;
+            try{_skipSave.current=true;setAllItems(JSON.parse(row.value));}catch(e){}
+          }
+        })
       .subscribe();
-    return()=>supabase.removeChannel(ch);
+    // Polling fallback every 5 seconds — ensures other browsers always stay in sync
+    const poll=setInterval(_fetchChecklist,5000);
+    return()=>{supabase.removeChannel(ch);clearInterval(poll);};
   },[]);
+
   // Debounced save to Supabase; skipped when the change came from a remote browser
   const _saveTimer=useRef(null);
   useEffect(()=>{
     if(_skipSave.current){_skipSave.current=false;return;}
     clearTimeout(_saveTimer.current);
     _saveTimer.current=setTimeout(()=>{
+      const serialized=JSON.stringify(allItems);
+      _lastValue.current=serialized;
       supabase.from('app_settings')
-        .upsert({key:'checklist_data',value:JSON.stringify(allItems)},{onConflict:'key'})
+        .upsert({key:'checklist_data',value:serialized},{onConflict:'key'})
         .then(({error})=>{if(error)console.warn('[checklist] save failed:',error.message);});
     },400);
     return()=>clearTimeout(_saveTimer.current);
