@@ -541,8 +541,13 @@ const Modal = ({title,onClose,children,wide,extraWide,footer})=>{
         display:'flex',
         alignItems:'flex-start',
         justifyContent:'center',
-        padding:'16px',
-        paddingBottom:'24px',
+        // paddingTop pushes modal below browser top chrome.
+        // paddingBottom uses safe-area-inset-bottom so Android gesture nav
+        // bar never overlaps the sticky footer buttons.
+        paddingTop:'12px',
+        paddingLeft:'12px',
+        paddingRight:'12px',
+        paddingBottom:'max(20px, env(safe-area-inset-bottom, 20px))',
       }}
     >
       <div
@@ -553,15 +558,15 @@ const Modal = ({title,onClose,children,wide,extraWide,footer})=>{
           borderRadius:'var(--r-xl)',
           width:'100%',
           maxWidth:extraWide?820:wide?640:440,
-          // Inner box is the scroll container — reliable on all mobile browsers.
-          // 100svh = small viewport height (excludes browser chrome + keyboard).
-          // Falls back to 100vh on older browsers — still better than fixed backdrop scroll.
-          maxHeight:'calc(100svh - 32px)',
+          // 100dvh = dynamic viewport height — always the visible area after
+          // browser chrome, keyboard, and nav bars are accounted for.
+          // Subtract backdrop top+bottom padding (12px + 20px = 32px) so the
+          // modal never overflows the screen.
+          maxHeight:'calc(100dvh - 32px)',
           display:'flex',
           flexDirection:'column',
           boxShadow:'var(--sh-lg)',
           animation:'fadeUp .3s ease both',
-          marginTop: 0,
         }}
       >
         {/* Header — never scrolls away */}
@@ -594,6 +599,7 @@ const Modal = ({title,onClose,children,wide,extraWide,footer})=>{
           <div style={{
             flexShrink:0,
             padding:'12px 20px',
+            paddingBottom:'max(12px, env(safe-area-inset-bottom, 12px))',
             borderTop:'1px solid var(--border)',
             background:'var(--surface)',
             display:'flex',gap:10,justifyContent:'flex-end',
