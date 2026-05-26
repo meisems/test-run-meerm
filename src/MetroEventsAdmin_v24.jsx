@@ -2141,6 +2141,77 @@ const WarehouseView = ({role,events=[],addLog})=>{
   );
 };
 
+/* ReceiptUploadModal — reads a file from disk and shows a preview.
+   Accepts images (JPG/PNG/GIF/WEBP) and PDFs.
+   The file is converted to a base64 data-URL so it persists in
+   useSyncedState (Supabase app_settings) and appears in every browser. */
+const ReceiptUploadModal = ({supplier, existing, onClose, onSave}) => {
+  const [preview, setPreview] = useState(existing||null); // data-URL or null
+  const [fileType, setFileType] = useState(existing?.startsWith('data:application/pdf')?'pdf': existing?'image':null);
+  const [error, setError] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef(null);
+
+  const handleFile = (file) => {
+    if(!file) return;
+    if(file.size > 10*1024*1024){ setError('File exceeds 10 MB limit. Please choose a smaller file.'); return; }
+    const allowed = ['image/jpeg','image/png','image/gif','image/webp','application/pdf'];
+    if(!allowed.includes(file.type)){ setError('Only PDF, JPG, PNG, GIF, WEBP files are accepted.'); return; }
+    setError('');
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setPreview(e.target.result);
+      setFileType(file.type === 'application/pdf' ? 'pdf' : 'image');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragging(false);
+    handleFile(e.dataTransfer.files[0]);
+  };
+
+  return (
+    <Modal title={`Upload Receipt — ${supplier.name}`} onClose={onClose}>
+      {/* Drop zone */}
+      <div
+        onDragOver={e=>{e.preventDefault();setDragging(true);}}
+        onDragLeave={()=>setDragging(false)}
+        onDrop={onDrop}
+        onClick={()=>inputRef.current?.click()}
+        style={{border:`2px dashed ${dragging?'var(--gold)':'var(--border)'}`,borderRadius:'var(--r-lg)',padding:'28px 20px',textAlign:'center',cursor:'pointer',background:dragging?'var(--gold-faint)':'var(--overlay)',transition:'all var(--t-base)',marginBottom:12}}
+      >
+        <Upload size={24} color='var(--gold)' style={{margin:'0 auto 10px'}}/>
+        <div style={{fontSize:13,fontWeight:500,color:'var(--tp)'}}>{preview?'Click or drop to replace':'Click or drop to upload'}</div>
+        <div style={{fontSize:11,color:'var(--tm)',marginTop:4}}>PDF, JPG, PNG · Max 10 MB</div>
+        <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp" style={{display:'none'}}
+          onChange={e=>handleFile(e.target.files[0])}/>
+      </div>
+
+      {/* Error */}
+      {error&&<div style={{fontSize:12,color:'var(--danger)',marginBottom:10,padding:'8px 12px',background:'var(--danger-pale)',borderRadius:'var(--r-sm)'}}>{error}</div>}
+
+      {/* Preview */}
+      {preview&&(
+        <div style={{marginBottom:14,borderRadius:'var(--r-md)',overflow:'hidden',border:'1px solid var(--border)',maxHeight:340,display:'flex',alignItems:'center',justifyContent:'center',background:'#000'}}>
+          {fileType==='pdf'
+            ? <embed src={preview} type="application/pdf" width="100%" height="320px" style={{display:'block'}}/>
+            : <img src={preview} alt="Receipt preview" style={{maxWidth:'100%',maxHeight:320,objectFit:'contain',display:'block'}}/>
+          }
+        </div>
+      )}
+
+      {/* Actions */}
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+        <GhostBtn onClick={onClose}>Cancel</GhostBtn>
+        <GoldBtn onClick={()=>{if(preview) onSave(preview);}} style={{opacity:preview?1:.5,pointerEvents:preview?'auto':'none'}}>
+          <Upload size={13}/>{existing?'Replace Receipt':'Save Receipt'}
+        </GoldBtn>
+      </div>
+    </Modal>
+  );
+};
+
 /* ══════════════════════════════════════════════════════
    MODULE 6 — SUPPLIER HUB (FULL INLINE EDIT)
 ══════════════════════════════════════════════════════ */
@@ -2150,7 +2221,9 @@ const SupplierView = ({role,addLog})=>{
   const [editSup,setEditSup]=useState(null);
   const [editForm,setEditForm]=useState({});
   const [upload,setUpload]=useState(null);
-  const [receipts,setReceipts]=useState({});
+  // metro_receipts synced so receipt uploads are visible across all browsers/tabs.
+  // Values are base64 data-URLs so previews render without a separate storage fetch.
+  const [receipts,setReceipts]=useSyncedState('metro_receipts',{});
   const [showAddSup,setShowAddSup]=useState(false);
   const [addSupForm,setAddSupForm]=useState({});
   const [delSupConfirm,setDelSupConfirm]=useState(null);
@@ -2297,7 +2370,13 @@ const SupplierView = ({role,addLog})=>{
                     onMouseLeave={e=>e.currentTarget.style.background='var(--info-pale)'}>
                       <Upload size={11}/> Receipt
                     </button>
-                    {receipts[s.id]&&<Badge label="Receipt Uploaded" color="green" dot/>}
+                    {receipts[s.id]&&(
+                      receipts[s.id].startsWith('data:image')
+                        ? <img src={receipts[s.id]} alt="Receipt" title="Receipt uploaded — click Receipt to view"
+                            style={{width:28,height:28,objectFit:'cover',borderRadius:'var(--r-xs)',border:'1.5px solid var(--success)',cursor:'pointer'}}
+                            onClick={()=>setUpload(s)}/>
+                        : <Badge label="Receipt Uploaded" color="green" dot/>
+                    )}
                     {canAdmin&&(
                       <button onClick={()=>setDelSupConfirm(s)} aria-label={`Delete ${s.name}`} style={{padding:'6px 12px',background:'var(--danger-pale)',color:'var(--danger)',border:'1px solid var(--danger-border)',borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:5}}
                       onMouseEnter={e=>e.currentTarget.style.background='#fde0e0'}
@@ -2314,14 +2393,12 @@ const SupplierView = ({role,addLog})=>{
       </div>
 
       {upload&&(
-        <Modal title={`Upload Receipt — ${upload.name}`} onClose={()=>setUpload(null)}>
-          <div style={{border:'2px dashed var(--border)',borderRadius:'var(--r-lg)',padding:'32px 20px',textAlign:'center',marginBottom:16,cursor:'pointer',background:'var(--overlay)'}}
-          onClick={()=>{setReceipts(p=>({...p,[upload.id]:true}));setUpload(null);}}>
-            <Upload size={24} color='var(--gold)' style={{margin:'0 auto 10px'}}/>
-            <div style={{fontSize:13,fontWeight:500,color:'var(--tp)'}}>Click to simulate upload</div>
-            <div style={{fontSize:11,color:'var(--tm)',marginTop:4}}>PDF, JPG, PNG · Max 10MB · Stored in Supabase Storage</div>
-          </div>
-        </Modal>
+        <ReceiptUploadModal
+          supplier={upload}
+          existing={receipts[upload.id]}
+          onClose={()=>setUpload(null)}
+          onSave={(dataUrl)=>{setReceipts(p=>({...p,[upload.id]:dataUrl}));setUpload(null);}}
+        />
       )}
 
       {/* Add Supplier Modal */}
@@ -2446,6 +2523,20 @@ const QuotationView = ({role})=>{
   const toggleDiscount=key=>setDiscounts(p=>p.map(d=>d.key===key?{...d,active:!d.active}:d));
   const setDiscountType=(key,type)=>setDiscounts(p=>p.map(d=>d.key===key?{...d,type}:d));
   const setDiscountValue=(key,value)=>setDiscounts(p=>p.map(d=>d.key===key?{...d,value:Number(value)}:d));
+  // Editable label/sub per discount row
+  const setDiscountLabel=(key,label)=>setDiscounts(p=>p.map(d=>d.key===key?{...d,label}:d));
+  const setDiscountSub=(key,sub)=>setDiscounts(p=>p.map(d=>d.key===key?{...d,sub}:d));
+  // Add / delete discounts (admin only)
+  const [showAddDiscount,setShowAddDiscount]=useState(false);
+  const [newDiscount,setNewDiscount]=useState({label:'',sub:'',type:'percent',value:0});
+  const addDiscount=()=>{
+    if(!newDiscount.label.trim()) return;
+    const key='disc-'+Date.now();
+    setDiscounts(p=>[...p,{key,label:newDiscount.label.trim(),sub:newDiscount.sub.trim(),type:newDiscount.type,value:Number(newDiscount.value)||0,active:false}]);
+    setNewDiscount({label:'',sub:'',type:'percent',value:0});
+    setShowAddDiscount(false);
+  };
+  const deleteDiscount=key=>setDiscounts(p=>p.filter(d=>d.key!==key));
 
   const startEditPkg=(p)=>{setEditPkgId(p.id);setEditPkgForm({...p});};
   const saveEditPkg=()=>{setPkgs(prev=>prev.map(p=>p.id===editPkgId?{...editPkgForm,margin:Number(editPkgForm.margin)}:p));setEditPkgId(null);};
@@ -2601,17 +2692,58 @@ const QuotationView = ({role})=>{
             </div>
           </div>
 
-          {/* Discount variables (flexible %/₱) */}
+          {/* Discount variables (flexible %/₱) — admin can edit labels, values, add/delete */}
           <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',padding:'20px',boxShadow:'var(--sh-sm)'}}>
-            <span className="section-label">Discount Variables</span>
+            <div style={{display:'flex',alignItems:'center',marginBottom:12}}>
+              <span className="section-label" style={{marginBottom:0,flex:1}}>Discount Variables</span>
+              {canOverride&&(
+                <button onClick={()=>setShowAddDiscount(v=>!v)} style={{padding:'4px 10px',background:showAddDiscount?'var(--gold)':'var(--gold-pale)',color:showAddDiscount?'#fff':'var(--gold)',border:`1.5px solid var(--gold-border)`,borderRadius:'var(--r-sm)',fontSize:11,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:5}}>
+                  <Plus size={11}/>{showAddDiscount?'Cancel':'Add Discount'}
+                </button>
+              )}
+            </div>
+
+            {/* Add Discount form (admin only) */}
+            {canOverride&&showAddDiscount&&(
+              <div style={{background:'var(--gold-faint)',border:'1.5px solid rgba(184,146,74,.3)',borderRadius:'var(--r-md)',padding:'14px',marginBottom:12,animation:'fadeUp .2s ease'}}>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--gold)',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:10}}>New Discount</div>
+                <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Label</label>
+                <input className="edit-field" placeholder="e.g. Loyalty Discount" value={newDiscount.label} onChange={e=>setNewDiscount(f=>({...f,label:e.target.value}))} style={{marginBottom:8}}/>
+                <label style={{fontSize:10,fontWeight:600,color:'var(--ts)',textTransform:'uppercase',letterSpacing:'.06em',display:'block',marginBottom:3}}>Description</label>
+                <input className="edit-field" placeholder="e.g. Returning clients" value={newDiscount.sub} onChange={e=>setNewDiscount(f=>({...f,sub:e.target.value}))} style={{marginBottom:8}}/>
+                <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:10}}>
+                  <div style={{display:'flex',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',overflow:'hidden'}}>
+                    {['percent','fixed'].map(t=>(
+                      <button key={t} onClick={()=>setNewDiscount(f=>({...f,type:t}))} style={{padding:'4px 12px',background:newDiscount.type===t?'var(--navy)':'transparent',color:newDiscount.type===t?'#f8f4ed':'var(--ts)',border:'none',fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                        {t==='percent'?'%':'₱'}
+                      </button>
+                    ))}
+                  </div>
+                  <input type="number" className="edit-field" value={newDiscount.value} onChange={e=>setNewDiscount(f=>({...f,value:e.target.value}))} style={{width:80}} min={0} placeholder="0"/>
+                </div>
+                <button onClick={addDiscount} disabled={!newDiscount.label.trim()} style={{width:'100%',padding:'8px',background:'var(--success)',color:'#fff',border:'none',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:600,cursor:newDiscount.label.trim()?'pointer':'not-allowed',opacity:newDiscount.label.trim()?1:.5,display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+                  <Plus size={12}/>Add Discount
+                </button>
+              </div>
+            )}
+
             {discounts.map(d=>(
               <div key={d.key} style={{display:'flex',alignItems:'flex-start',gap:12,padding:'12px 14px',border:`1.5px solid ${d.active?'var(--success)':'var(--border)'}`,borderRadius:'var(--r-md)',marginBottom:9,background:d.active?'var(--success-pale)':'transparent',transition:'all var(--t-base)'}}>
                 <div onClick={()=>toggleDiscount(d.key)} style={{width:20,height:12,background:d.active?'var(--success)':'var(--border-s)',borderRadius:'var(--r-full)',position:'relative',flexShrink:0,transition:'background var(--t-base)',marginTop:3,cursor:'pointer'}}>
                   <div style={{position:'absolute',width:10,height:10,background:'#fff',borderRadius:'50%',top:1,left:d.active?9:1,transition:'left var(--t-base)',boxShadow:'var(--sh-xs)'}}/>
                 </div>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:13,fontWeight:500,color:'var(--tp)'}}>{d.label}</div>
-                  <div style={{fontSize:11,color:'var(--ts)'}}>{d.sub}</div>
+                  {/* Editable label and sub when admin override is on */}
+                  {canOverride
+                    ? <>
+                        <input className="edit-field" value={d.label} onChange={e=>setDiscountLabel(d.key,e.target.value)} style={{marginBottom:4,fontSize:13,fontWeight:500}} placeholder="Discount name"/>
+                        <input className="edit-field" value={d.sub} onChange={e=>setDiscountSub(d.key,e.target.value)} style={{fontSize:11,color:'var(--ts)'}} placeholder="Short description"/>
+                      </>
+                    : <>
+                        <div style={{fontSize:13,fontWeight:500,color:'var(--tp)'}}>{d.label}</div>
+                        <div style={{fontSize:11,color:'var(--ts)'}}>{d.sub}</div>
+                      </>
+                  }
                   {canOverride&&(
                     <div style={{display:'flex',gap:8,alignItems:'center',marginTop:8}}>
                       {/* Type toggle */}
@@ -2624,6 +2756,10 @@ const QuotationView = ({role})=>{
                       </div>
                       <input type="number" className="edit-field" value={d.value} onChange={e=>setDiscountValue(d.key,e.target.value)} style={{width:80}} min={0}/>
                       <span style={{fontSize:11,color:'var(--tm)'}}>{d.type==='percent'?`= ${fmt(Math.round(subtotal*(d.value/100)))} off`:`flat deduction`}</span>
+                      {/* Delete discount button */}
+                      <button onClick={()=>deleteDiscount(d.key)} aria-label={`Delete ${d.label} discount`} title="Delete this discount" style={{marginLeft:'auto',padding:'3px 8px',background:'var(--danger-pale)',color:'var(--danger)',border:'1px solid var(--danger-border)',borderRadius:'var(--r-sm)',fontSize:11,cursor:'pointer',display:'flex',alignItems:'center',gap:4}}>
+                        <Trash2 size={10}/>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2682,12 +2818,13 @@ const QuotationView = ({role})=>{
 /* ══════════════════════════════════════════════════════
    MODULE 9 — AUDIT LOGS & PERMISSIONS + CODE BOARD
 ══════════════════════════════════════════════════════ */
-const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
+const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog,setAuditLogs})=>{
   if(!ACCESS[role].includes('audit')) return <RoleBlock module="Audit Logs & Permissions" role={role}/>;
   const [tab,setTab]=useState('logs');
   const [codeEdit,setCodeEdit]=useState({});   // {role: editingValue}
   const [codeVisible,setCodeVisible]=useState({});  // {role: bool}
   const [rotateAnim,setRotateAnim]=useState({});
+  const [clearConfirm,setClearConfirm]=useState(false); // admin-only clear-all logs confirm
 
   const sevColor=s=>({info:'blue',warn:'orange',danger:'red'})[s]||'grey';
   const sevIcon=s=>({info:Info,warn:AlertTriangle,danger:XCircle})[s]||Info;
@@ -2768,7 +2905,38 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
           document.body.appendChild(a); a.click();
           document.body.removeChild(a); URL.revokeObjectURL(url);
         }} style={{marginLeft:'auto',padding:'7px 14px',background:'var(--overlay)',border:'1.5px solid var(--border)',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:500,color:'var(--ts)',cursor:'pointer',display:'flex',alignItems:'center',gap:5}}><Download size={12}/>Export Log</button>}
+        {/* Admin-only: clear all logs */}
+        {tab==='logs'&&role==='admin'&&(
+          <button onClick={()=>setClearConfirm(true)} style={{padding:'7px 14px',background:'var(--danger-pale)',border:'1.5px solid var(--danger-border)',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:500,color:'var(--danger)',cursor:'pointer',display:'flex',alignItems:'center',gap:5}}>
+            <Trash2 size={12}/>Clear All Logs
+          </button>
+        )}
       </div>
+
+      {/* Clear All Logs confirm dialog (admin only) */}
+      {clearConfirm&&(
+        <div style={{background:'var(--danger-pale)',border:'1.5px solid var(--danger-border)',borderRadius:'var(--r-lg)',padding:'18px 20px',marginBottom:14,animation:'fadeUp .2s ease'}}>
+          <div style={{fontSize:13,fontWeight:600,color:'var(--danger)',marginBottom:6}}>Clear all {auditLogs.length} log entries?</div>
+          <div style={{fontSize:12,color:'var(--ts)',marginBottom:14}}>This permanently deletes every activity record from both this session and Supabase. This action cannot be undone.</div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>{
+              // Clear local state immediately for instant feedback across all components
+              setAuditLogs&&setAuditLogs([]);
+              // Delete all rows from Supabase so other browsers also see the cleared log
+              (supabaseAdmin??supabase).from('audit_logs').delete().neq('id',0)
+                .then(({error})=>{if(error) console.error('[audit] clear failed:',error.message);});
+              setClearConfirm(false);
+              // Log the clear action itself after clearing
+              addLog&&addLog('Cleared all audit logs','audit_logs','danger');
+            }} style={{flex:1,padding:'8px',background:'var(--danger)',color:'#fff',border:'none',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:600,cursor:'pointer'}}>
+              Yes, Clear All
+            </button>
+            <button onClick={()=>setClearConfirm(false)} style={{flex:1,padding:'8px',background:'var(--overlay)',color:'var(--ts)',border:'1px solid var(--border)',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:600,cursor:'pointer'}}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {tab==='logs'&&(
         <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--r-lg)',boxShadow:'var(--sh-sm)',overflow:'hidden'}}>
@@ -3438,7 +3606,7 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
     warehouse:<WarehouseView role={user.role} events={events} addLog={addLog}/>,
     supplier:<SupplierView role={user.role} addLog={addLog}/>,
     quotation:<QuotationView role={user.role}/>,
-    audit:<AuditView role={user.role} accessCodes={accessCodes} setAccessCodes={setAccessCodes} auditLogs={auditLogs} addLog={addLog}/>,
+    audit:<AuditView role={user.role} accessCodes={accessCodes} setAccessCodes={setAccessCodes} auditLogs={auditLogs} addLog={addLog} setAuditLogs={setAuditLogs}/>,
   };
 
   /* ── Change Password trigger button (reused in both sidebars) ── */
