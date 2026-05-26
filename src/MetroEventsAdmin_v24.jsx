@@ -264,12 +264,18 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
   const lastVal  = useRef('');
   const skipSave = useRef(false);
   const saveTimer= useRef(null);
+  // ↓ KEY FIX: block saves until the first Supabase fetch completes.
+  // Without this, a browser with empty localStorage initialises state as {}
+  // and immediately overwrites Supabase with that empty value before the
+  // real data has been fetched — wiping everyone else's data.
+  const loaded   = useRef(false);
 
   // Stable fetch fn via ref — avoids stale closure in setInterval
   const fetchFn = useRef(null);
   fetchFn.current = () => {
     supabase.from('app_settings').select('value').eq('key', supabaseKey).maybeSingle()
       .then(({data}) => {
+        loaded.current = true; // allow saves from this point on
         if(data?.value && data.value !== lastVal.current){
           lastVal.current = data.value;
           try { skipSave.current = true; setState(JSON.parse(data.value)); } catch(e) {}
@@ -294,6 +300,7 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
   }, [supabaseKey]);
 
   useEffect(() => {
+    if(!loaded.current) return; // wait for initial fetch before saving
     if(skipSave.current){ skipSave.current = false; return; }
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
