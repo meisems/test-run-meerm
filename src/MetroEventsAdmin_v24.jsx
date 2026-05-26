@@ -3483,7 +3483,18 @@ const ChangePasswordModal = ({user,staff,setStaff,adminPassword,setAdminPassword
    ADMIN SHELL
 ══════════════════════════════════════════════════════ */
 const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adminPassword,setAdminPassword,adminUsername,setAdminUsername,setUser,auditLogs,setAuditLogs})=>{
-  const [tab,setTab]=useState('dashboard');
+  // Restore last active tab from localStorage so a reload lands back where
+  // the user was. Falls back to 'dashboard' if the saved tab doesn't exist
+  // or the current role doesn't have access to it.
+  const [tab,setTab]=useState(()=>{
+    try{
+      const saved=localStorage.getItem('metro_active_tab');
+      if(saved&&ACCESS[user.role]?.includes(saved)) return saved;
+    }catch(e){}
+    return 'dashboard';
+  });
+  // Persist tab changes immediately so reloads restore the right view
+  const navigateTo=(id)=>{setTab(id);try{localStorage.setItem('metro_active_tab',id);}catch(e){}};
   const [sideOpen,setSideOpen]=useState(false);
   // Optimistic-first: start from localStorage so the UI is instant on reload,
   // then fetch Supabase on mount and overwrite with the authoritative server state.
@@ -3577,7 +3588,7 @@ const AdminShell = ({user,onLogout,accessCodes,setAccessCodes,staff,setStaff,adm
     const locked=!allowed.includes(t.id);
     return(
       <button
-        onClick={()=>{setTab(t.id);setSideOpen(false);}}
+        onClick={()=>{navigateTo(t.id);setSideOpen(false);}}
         aria-current={active?'page':undefined}
         aria-label={locked?`${t.label} (access restricted)`:t.label}
         style={{
