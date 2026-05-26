@@ -278,6 +278,10 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
   // and immediately overwrites Supabase with that empty value before the
   // real data has been fetched — wiping everyone else's data.
   const loaded   = useRef(false);
+  // BroadcastChannel for instant same-origin cross-tab delivery.
+  // Supabase realtime covers different browsers; this covers the case where
+  // the user has two tabs open in the same browser — no network round-trip needed.
+  const bc       = useRef(null);
 
   // Stable fetch fn via ref — avoids stale closure in setInterval
   const fetchFn = useRef(null);
@@ -294,6 +298,8 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
 
   useEffect(() => {
     fetchFn.current(); // initial load
+
+    // Supabase realtime — covers cross-browser updates
     const ch = db.channel('sync-' + supabaseKey)
       .on('postgres_changes', {event:'*', schema:'public', table:'app_settings'},
         ({new:row}) => {
@@ -303,8 +309,30 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
           }
         })
       .subscribe();
+
+    // BroadcastChannel — instant same-browser cross-tab sync (no Supabase round-trip)
+    try {
+      bc.current = new BroadcastChannel('metro-sync-' + supabaseKey);
+      bc.current.onmessage = (e) => {
+        if(e.data && e.data !== lastVal.current){
+          lastVal.current = e.data;
+          try { skipSave.current = true; setState(JSON.parse(e.data)); } catch(err) {}
+        }
+      };
+    } catch(err) { /* BroadcastChannel not supported — fall back to polling only */ }
+
+    // visibilitychange — immediately re-fetch when the tab regains focus so the
+    // user always sees fresh data without waiting for the next poll interval.
+    const onVisible = () => { if(document.visibilityState === 'visible') fetchFn.current(); };
+    document.addEventListener('visibilitychange', onVisible);
+
     const poll = setInterval(() => fetchFn.current(), pollMs);
-    return () => { db.removeChannel(ch); clearInterval(poll); };
+    return () => {
+      db.removeChannel(ch);
+      clearInterval(poll);
+      bc.current?.close(); bc.current = null;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabaseKey]);
 
@@ -316,6 +344,8 @@ const useSyncedState = (supabaseKey, init, pollMs=5000) => {
       const serialized = JSON.stringify(state);
       try { localStorage.setItem(supabaseKey, serialized); } catch(e) {}
       lastVal.current = serialized;
+      // Notify other tabs in the same browser immediately
+      try { bc.current?.postMessage(serialized); } catch(e) {}
       db.from('app_settings')
         .upsert({key: supabaseKey, value: serialized}, {onConflict: 'key'})
         .then(({error}) => {
@@ -2383,7 +2413,9 @@ const QuotationView = ({role})=>{
   const [addonsLib,setAddonsLib]=useSyncedState('metro_addons',ADDONS_INIT);
   const [selectedPkg,setSelectedPkg]=useState('grand');
   const [selectedAddons,setSelectedAddons]=useState([]);
-  const [discounts,setDiscounts]=useState([
+  // metro_discounts synced so discount toggles/edits made in one browser
+  // are immediately reflected in every other open browser/tab.
+  const [discounts,setDiscounts]=useSyncedState('metro_discounts',[
     {key:'earlybird',label:'Early Bird Discount',sub:'Booked 90+ days ahead',type:'percent',value:10,active:false},
     {key:'referral',label:'Referral Discount',sub:'Referred by existing client',type:'percent',value:5,active:false},
     {key:'bundle',label:'Multi-Event Bundle',sub:'2+ events same year',type:'percent',value:8,active:false},
