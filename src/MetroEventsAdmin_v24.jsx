@@ -533,21 +533,17 @@ const Modal = ({title,onClose,children,wide,extraWide,footer})=>{
       aria-labelledby={titleId}
       onClick={onClose}
       style={{
-        // Backdrop: just the dark scrim, no scrolling here.
-        // Scrolling on position:fixed is unreliable on Android Chrome when
-        // the virtual keyboard is open — the inner modal box scrolls instead.
         position:'fixed',inset:0,zIndex:9999,
         background:'rgba(0,0,0,0.7)',
         display:'flex',
         alignItems:'flex-start',
         justifyContent:'center',
-        // paddingTop pushes modal below browser top chrome.
-        // paddingBottom uses safe-area-inset-bottom so Android gesture nav
-        // bar never overlaps the sticky footer buttons.
         paddingTop:'12px',
         paddingLeft:'12px',
         paddingRight:'12px',
-        paddingBottom:'max(20px, env(safe-area-inset-bottom, 20px))',
+        // 64px bottom clears Android 3-button nav bar (48px) + gesture bar (34px)
+        // env() fallback also included for devices that do expose it
+        paddingBottom:'max(64px, env(safe-area-inset-bottom, 64px))',
       }}
     >
       <div
@@ -558,11 +554,8 @@ const Modal = ({title,onClose,children,wide,extraWide,footer})=>{
           borderRadius:'var(--r-xl)',
           width:'100%',
           maxWidth:extraWide?820:wide?640:440,
-          // 100dvh = dynamic viewport height — always the visible area after
-          // browser chrome, keyboard, and nav bars are accounted for.
-          // Subtract backdrop top+bottom padding (12px + 20px = 32px) so the
-          // modal never overflows the screen.
-          maxHeight:'calc(100dvh - 32px)',
+          // maxHeight accounts for top padding (12px) + bottom clearance (64px) = 76px
+          maxHeight:'calc(100dvh - 76px)',
           display:'flex',
           flexDirection:'column',
           boxShadow:'var(--sh-lg)',
