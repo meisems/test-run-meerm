@@ -2716,7 +2716,26 @@ const AuditView = ({role,accessCodes,setAccessCodes,auditLogs=[],addLog})=>{
             {id==='codes'&&<Badge label="Admin Only" color="gold"/>}
           </button>
         ))}
-        {tab==='logs'&&<button style={{marginLeft:'auto',padding:'7px 14px',background:'var(--overlay)',border:'1.5px solid var(--border)',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:500,color:'var(--ts)',cursor:'pointer',display:'flex',alignItems:'center',gap:5}}><Download size={12}/>Export Log</button>}
+        {tab==='logs'&&<button onClick={()=>{
+          // Build CSV from current audit log data
+          const headers = ['Timestamp','Staff','Role','Action','Target','Severity'];
+          const rows = auditLogs.map(l=>[
+            `"${(l.ts||'').replace(/"/g,'""')}"`,
+            `"${(l.user||'').replace(/"/g,'""')}"`,
+            `"${(l.role||'').replace(/"/g,'""')}"`,
+            `"${(l.action||'').replace(/"/g,'""')}"`,
+            `"${(l.target||'').replace(/"/g,'""')}"`,
+            `"${(l.sev||'').replace(/"/g,'""')}"`,
+          ].join(','));
+          const csv = [headers.join(','), ...rows].join('\r\n');
+          const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          const ts = new Date().toISOString().slice(0,10);
+          a.href = url; a.download = `metro-audit-log-${ts}.csv`;
+          document.body.appendChild(a); a.click();
+          document.body.removeChild(a); URL.revokeObjectURL(url);
+        }} style={{marginLeft:'auto',padding:'7px 14px',background:'var(--overlay)',border:'1.5px solid var(--border)',borderRadius:'var(--r-sm)',fontSize:12,fontWeight:500,color:'var(--ts)',cursor:'pointer',display:'flex',alignItems:'center',gap:5}}><Download size={12}/>Export Log</button>}
       </div>
 
       {tab==='logs'&&(
